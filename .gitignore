@@ -1,60 +1,46 @@
-# =========================
 # Python
-# =========================
 __pycache__/
 *.py[cod]
-*.pyo
+*$py.class
+*.so
 
-# =========================
-# Virtual environment
-# =========================
+# Virtual environments
 venv/
 .venv/
 env/
 ENV/
+credentials.json
 
-# =========================
-# Secrets / credentials
-# =========================
+# Environment variables / secrets
 .env
 .env.*
-credentials.json
-*.pem
-*.key
+!.env.example
 
-# =========================
-# Databases / local data
-# =========================
+# Databases
 *.db
 *.sqlite
 *.sqlite3
 
-# =========================
 # Logs
-# =========================
 *.log
 logs/
 
-# =========================
-# OS files
-# =========================
+# OS
 .DS_Store
 Thumbs.db
 
-# =========================
-# VS Code
-# =========================
+# IDE
 .vscode/
 
-# =========================
 # Generated files
-# =========================
 *.png
 *.jpg
 *.jpeg
 
-# =========================
-# Playwright
-# =========================
+# Playwright / browser files
 playwright-report/
 test-results/
+
+# Temporary files
+tmp/
+temp/

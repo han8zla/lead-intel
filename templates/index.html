@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Lead Intelligence Platform</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f4f9; padding: 40px; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0px 0px 10px rgba(0,0,0,0.1); margin-bottom: 30px; }
+        h1 { color: #333; text-align: center; }
+        h2 { color: #555; font-size: 20px; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
+        input, textarea { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; }
+        textarea { resize: vertical; }
+        .links-box { height: 100px; }
+        .html-box { height: 250px; font-family: monospace; font-size: 12px; }
+        button { width: 100%; padding: 12px; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+        .btn-blue { background: #007bff; }
+        .btn-blue:hover { background: #0056b3; }
+        .btn-green { background: #28a745; }
+        .btn-green:hover { background: #218838; }
+        .result { margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 5px; display: none; }
+    </style>
+</head>
+<body>
+    <h1>🚀 Lead Intelligence Platform</h1>
+
+    <!-- AUTOMATED LINK INTAKE -->
+    <div class="container">
+        <h2>🤖 Automated Intake (Bot Processes)</h2>
+        <form id="leadForm">
+            <label>Paste Links (Google Maps, Yelp, or Website URLs - one per line):</label>
+            <textarea id="links" class="links-box" placeholder="https://maps.google.com/...
+https://www.yelp.com/biz/..."></textarea>
+            <button type="submit" class="btn-blue">Add to Bot Queue</button>
+        </form>
+        <div class="result" id="resultBox1">
+            <p id="resultText1"></p>
+        </div>
+    </div>
+
+    <!-- MANUAL HTML INTAKE -->
+    <div class="container">
+        <h2>👨‍💻 Manual Override (Paste Blocked Website HTML)</h2>
+        <p style="font-size: 14px; color: #666;">If the bot gets blocked (403 Forbidden), view the page source in your browser, copy it, and paste it below.</p>
+        <form id="htmlForm">
+            <label>Website URL (for records):</label>
+            <input type="text" id="manual_url" placeholder="https://the-blocked-website.com/" required>
+            
+            <label>Raw HTML Source Code:</label>
+            <textarea id="raw_html" class="html-box" placeholder="<!DOCTYPE html><html>..."></textarea>
+            <button type="submit" class="btn-green">Process HTML Directly</button>
+        </form>
+        <div class="result" id="resultBox2">
+            <p id="resultText2"></p>
+        </div>
+    </div>
+
+    <script>
+        // Automated Link Submission
+        document.getElementById('leadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const resultBox = document.getElementById('resultBox1');
+            const resultText = document.getElementById('resultText1');
+            resultBox.style.display = 'block';
+            resultText.innerText = "Adding links to queue...";
+            const links = document.getElementById('links').value.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+            try {
+                const res = await fetch('/enrich', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({links}) });
+                const data = await res.json();
+                resultText.innerText = data.success ? "✅ " + data.message : "❌ " + data.message;
+                if(data.success) document.getElementById('links').value = '';
+            } catch (e) { resultText.innerText = "⚠️ Error connecting to server."; }
+        });
+
+        // Manual HTML Submission
+        document.getElementById('htmlForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const resultBox = document.getElementById('resultBox2');
+            const resultText = document.getElementById('resultText2');
+            resultBox.style.display = 'block';
+            resultText.innerText = "Processing raw HTML...";
+            const url = document.getElementById('manual_url').value;
+            const html = document.getElementById('raw_html').value;
+            try {
+                const res = await fetch('/manual-html', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({url, html}) });
+                const data = await res.json();
+                resultText.innerText = data.success ? "✅ " + data.message : "❌ " + data.message;
+                if(data.success) { document.getElementById('manual_url').value = ''; document.getElementById('raw_html').value = ''; }
+            } catch (e) { resultText.innerText = "⚠️ Error connecting to server."; }
+        });
+    </script>
+</body>
+</html>

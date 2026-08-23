@@ -1,0 +1,7 @@
+source venv/bin/activate
+uvicorn app:app --host 0.0.0.0 --port 8000
+python -m worker
+
+python -m core.database
+sqlite3 data/lead_intelligence.db
+SELECT id, company_name, website, extracted_emails, extracted_phones FROM leads;

@@ -2,14 +2,21 @@ import httpx
 
 
 class HTTPFetchError(Exception):
-    """Raised when a website cannot be retrieved normally."""
+    """Raised when a website cannot be fetched normally."""
 
 
 class HTTPFetcher:
     """
-    Retrieves raw HTML using a normal HTTP client.
+    Fetches raw HTML from a website using a normal HTTP request.
 
-    This class does NOT parse HTML.
+    This class ONLY downloads the page.
+
+    It does not:
+    - parse HTML
+    - extract emails
+    - extract phone numbers
+    - interact with Playwright
+    - write to the database
     """
 
     DEFAULT_TIMEOUT = 20.0
@@ -31,14 +38,28 @@ class HTTPFetcher:
 
     async def fetch(self, url: str) -> str:
         """
-        Fetch raw HTML.
+        Download a webpage and return its raw HTML.
+
+        Args:
+            url: Website URL.
+
+        Returns:
+            Raw HTML as a string.
 
         Raises:
             HTTPFetchError:
-                If the request fails or does not return HTML.
+                If the URL cannot be fetched or does not
+                return HTML.
         """
 
-        if not url.startswith(("http://", "https://")):
+        if not url:
+            raise HTTPFetchError(
+                "URL cannot be empty."
+            )
+
+        if not url.startswith(
+            ("http://", "https://")
+        ):
             raise HTTPFetchError(
                 "URL must start with http:// or https://"
             )
@@ -59,7 +80,8 @@ class HTTPFetcher:
 
         if response.status_code >= 400:
             raise HTTPFetchError(
-                f"Website returned HTTP {response.status_code}"
+                f"Website returned HTTP "
+                f"{response.status_code}"
             )
 
         content_type = response.headers.get(
@@ -67,15 +89,14 @@ class HTTPFetcher:
             "",
         ).lower()
 
-        # Don't try to feed PDFs, images, etc. to BeautifulSoup.
         if (
             "text/html" not in content_type
             and "application/xhtml+xml"
             not in content_type
         ):
             raise HTTPFetchError(
-                f"URL did not return HTML "
-                f"(Content-Type: {content_type})"
+                "URL did not return HTML. "
+                f"Content-Type: {content_type}"
             )
 
         return response.text

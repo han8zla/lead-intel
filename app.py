@@ -67,7 +67,6 @@ async def manual_html(request: Request):
 
     try:
         processor = WebsiteProcessor(page=None)
-
         cleaned_data = processor.process_html(html)
 
     except ValueError as exc:

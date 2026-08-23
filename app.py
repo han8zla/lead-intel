@@ -38,67 +38,192 @@ async def enrich_lead(request: Request):
 
 @app.post("/manual-html")
 async def manual_html(request: Request):
-    """Accepts raw HTML pasted by the user, processes it instantly, deduplicates"""
+    """
+    Accept raw HTML supplied by the user and process it
+    through the same HTML pipeline used by automatic scraping.
+    """
+
     data = await request.json()
-    url = data.get("url", "")
+
+    url = data.get("url", "").strip()
     html = data.get("html", "")
 
-    if not url or not html:
-        return {"success": False, "message": "URL and HTML are required."}
+    if not url:
+        return {
+            "success": False,
+            "message": "Website URL is required.",
+        }
 
-    logger.info(f"Received manual HTML for: {url}")
-    
-    # Use our existing processor logic to clean the HTML
-    processor = WebsiteProcessor(page=None)
-    cleaned_data = processor._extract_data_from_html(html)
-    emails_str = ", ".join(cleaned_data["emails"])
-    phones_str = ", ".join(cleaned_data["phones"])
-    
-    # Determine Status: If no email AND no phone, it's missing data!
-    if len(cleaned_data["emails"]) == 0 and len(cleaned_data["phones"]) == 0:
+    if not html.strip():
+        return {
+            "success": False,
+            "message": "HTML source is required.",
+        }
+
+    logger.info(
+        "Received manual HTML for: %s",
+        url,
+    )
+
+    try:
+        processor = WebsiteProcessor(page=None)
+
+        cleaned_data = processor.process_html(html)
+
+    except ValueError as exc:
+        return {
+            "success": False,
+            "message": str(exc),
+        }
+
+    except Exception as exc:
+        logger.exception(
+            "Manual HTML processing failed for %s",
+            url,
+        )
+
+        return {
+            "success": False,
+            "message": "Unable to process the supplied HTML.",
+        }
+
+    emails = cleaned_data["emails"]
+    phones = cleaned_data["phones"]
+
+    emails_str = ", ".join(emails)
+    phones_str = ", ".join(phones)
+
+    if not emails and not phones:
         status = "MISSING_DATA"
     else:
         status = "COMPLETED"
 
-    # CHECK FOR DUPLICATES: Does this website already exist in our database?
     existing_lead = db.get_lead_by_website(url)
-    
+
     if existing_lead:
-        # UPDATE EXISTING LEAD
-        lead_id = existing_lead['id']
-        logger.info(f"Found existing Lead ID {lead_id} for {url}. Updating with manual data.")
-        db.update_lead_scraped_data(lead_id, emails=emails_str, phones=phones_str, text=cleaned_data["text"])
-        db.update_lead_status(lead_id, status, website=url)
-        
-        # Update Google Sheet (we will build this function next)
+        lead_id = existing_lead["id"]
+
+        logger.info(
+            "Updating existing Lead ID %s",
+            lead_id,
+        )
+
+        db.update_lead_scraped_data(
+            lead_id,
+            emails=emails_str,
+            phones=phones_str,
+            text=cleaned_data["text"],
+        )
+
+        db.update_lead_status(
+            lead_id,
+            status,
+            website=url,
+        )
+
         sheets_manager.update_lead(
             lead_id=lead_id,
-            company_name=existing_lead['company_name'] or "Unknown",
-            source_url=existing_lead['source_url'] or "Manual Paste",
+            company_name=(
+                existing_lead["company_name"]
+                or "Unknown"
+            ),
+            source_url=(
+                existing_lead["source_url"]
+                or "Manual HTML"
+            ),
             website=url,
             emails=emails_str,
             phones=phones_str,
-            status=status
+            status=status,
         )
-        msg = f"Updated existing Lead ID {lead_id}! Status: {status}"
+
+        message = (
+            f"Updated existing Lead ID "
+            f"{lead_id}! Status: {status}"
+        )
+
     else:
-        # CREATE NEW LEAD
-        lead_id = db.add_lead(source_url="Manual Paste", company_name="Unknown", location="")
-        db.update_lead_status(lead_id, "PROCESSING", website=url)
-        db.update_lead_scraped_data(lead_id, emails=emails_str, phones=phones_str, text=cleaned_data["text"])
-        db.update_lead_status(lead_id, status, website=url)
-        
-        # Push to Google Sheet
+        lead_id = db.add_lead(
+            source_url="Manual HTML",
+            company_name="Unknown",
+            location="",
+        )
+
+        db.update_lead_status(
+            lead_id,
+            "PROCESSING",
+            website=url,
+        )
+
+        db.update_lead_scraped_data(
+            lead_id,
+            emails=emails_str,
+            phones=phones_str,
+            text=cleaned_data["text"],
+        )
+
+        db.update_lead_status(
+            lead_id,
+            status,
+            website=url,
+        )
+
         sheets_manager.add_lead(
             lead_id=lead_id,
             company_name="Unknown",
-            source_url="Manual Paste",
+            source_url="Manual HTML",
             website=url,
             emails=emails_str,
             phones=phones_str,
-            status=status
+            status=status,
         )
-        msg = f"Created new Lead ID {lead_id}! Status: {status}"
 
-    logger.info(msg)
-    return {"success": True, "message": msg}
+        message = (
+            f"Created new Lead ID "
+            f"{lead_id}! Status: {status}"
+        )
+
+    logger.info(message)
+
+    return {
+        "success": True,
+        "message": message,
+        "lead_id": lead_id,
+        "status": status,
+        "extracted": {
+            "emails": emails,
+            "phones": phones,
+            "text_length": len(cleaned_data["text"]),
+        },
+    }
+
+@app.post("/debug/process-html")
+async def debug_process_html(request: Request):
+    """
+    Development endpoint.
+
+    Processes HTML without touching the database.
+    Useful while developing the parser.
+    """
+
+    data = await request.json()
+
+    html = data.get("html", "")
+
+    if not html.strip():
+        return {
+            "success": False,
+            "message": "HTML is required.",
+        }
+
+    processor = WebsiteProcessor(page=None)
+
+    result = processor.process_html(html)
+
+    return {
+        "success": True,
+        "text_length": len(result["text"]),
+        "emails": result["emails"],
+        "phones": result["phones"],
+        "text_preview": result["text"][:1000],
+    }

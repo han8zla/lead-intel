@@ -38,14 +38,14 @@ class GoogleSheetsManager:
             text_preview = (text or "")[:500] + "..." if len(text or "") > 500 else text or ""
             
             row_data = [
-            lead_id,
-            company_name or "Unknown",
-            source_url or "",
-            website or "",
-            ", ".join(emails) if isinstance(emails, list) else (emails or ""),
-            ", ".join(phones) if isinstance(phones, list) else (phones or ""),
-            status or "",
-            text_preview
+                lead_id,
+                company_name or "Unknown",
+                source_url or "",
+                website or "",
+                self._normalize_value(emails),
+                self._normalize_value(phones),
+                status or "",
+                text_preview,
             ]
             
             self.sheet.append_row(row_data)
@@ -69,8 +69,8 @@ class GoogleSheetsManager:
                     company_name or "Unknown", 
                     source_url or "", 
                     website or "", 
-                    emails or "", 
-                    phones or "", 
+                    self._normalize_value(emails),
+                    self._normalize_value(phones),
                     status or ""
                 ]])
                 logger.info(f"Updated Lead ID {lead_id} in Google Sheets (Row {row_number}).")
@@ -79,3 +79,14 @@ class GoogleSheetsManager:
                 self.add_lead(lead_id, company_name, source_url, website, emails, phones, status)
         except Exception as e:
             logger.error(f"Failed to update lead in Google Sheets: {e}")
+
+    @staticmethod
+    def _normalize_value(value):
+        if isinstance(value, (list, tuple, set)):
+            return ", ".join(
+                str(item)
+                for item in value
+                if item
+            )
+
+        return str(value or "")

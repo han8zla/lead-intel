@@ -1,7 +1,6 @@
 import asyncio
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
-from bs4 import BeautifulSoup
 from playwright.async_api import (
     Page,
     TimeoutError as PlaywrightTimeoutError,
@@ -16,67 +15,57 @@ logger = get_logger(__name__)
 
 class WebsiteProcessor:
     """
-    Transitional website processor.
-
-    Responsibilities:
-    - Browser-based fetching for the legacy worker.
-    - Delegating HTML parsing to HTMLProcessor.
-
-    IMPORTANT:
-    The HTMLProcessor does not know anything about Playwright.
+    Handles browser-based website scraping and delegates HTML parsing
+    to HTMLProcessor.
     """
+
+    SUBPAGE_KEYWORDS = (
+        "about",
+        "contact",
+        "service",
+        "team",
+    )
+
+    COOKIE_SELECTORS = (
+        "button:has-text('Accept')",
+        "button:has-text('Accept All')",
+        "button:has-text('I agree')",
+        "button:has-text('Consent')",
+        "a:has-text('Accept')",
+    )
+
+    MAX_SUBPAGES = 3
+    MAX_TEXT_LENGTH = 15000
 
     def __init__(self, page: Page | None):
         self.page = page
         self.html_processor = HTMLProcessor()
 
     def process_html(self, html: str) -> dict:
-        """
-        Public HTML-processing interface.
-
-        This is the important new method.
-
-        Any future ingestion method can call this:
-        - HTTP
-        - manual HTML
-        - Playwright
-        """
-
+        """Parse raw HTML into structured lead data."""
         return self.html_processor.process(html)
 
-    async def _dismiss_cookies(self):
-        """Legacy browser-only cookie handling."""
+    async def _dismiss_cookies(self) -> None:
+        """Attempt to dismiss a common cookie-consent popup."""
 
         if self.page is None:
             return
 
-        cookie_selectors = [
-            "button:has-text('Accept')",
-            "button:has-text('Accept All')",
-            "button:has-text('I agree')",
-            "button:has-text('Consent')",
-            "a:has-text('Accept')",
-        ]
-
-        for selector in cookie_selectors:
+        for selector in self.COOKIE_SELECTORS:
             try:
                 button = await self.page.query_selector(selector)
 
                 if button:
                     await button.click()
-
-                    logger.info(
-                        "Dismissed cookie consent popup."
-                    )
-
+                    logger.info("Dismissed cookie consent popup.")
                     await asyncio.sleep(1)
-                    break
+                    return
 
             except Exception:
-                pass
+                continue
 
-    async def _safe_goto(self, url: str):
-        """Legacy Playwright navigation."""
+    async def _safe_goto(self, url: str) -> None:
+        """Navigate to a URL while tolerating page-load timeouts."""
 
         if self.page is None:
             raise RuntimeError(
@@ -89,21 +78,68 @@ class WebsiteProcessor:
                 wait_until="domcontentloaded",
                 timeout=15000,
             )
-
         except PlaywrightTimeoutError:
             logger.warning(
-                "Page load timed out for %s, "
-                "continuing with partial load...",
+                "Page load timed out for %s; "
+                "continuing with partial load.",
                 url,
             )
 
         await asyncio.sleep(3)
 
+    @staticmethod
+    def _same_domain(base_url: str, target_url: str) -> bool:
+        """Return True when both URLs belong to the same hostname."""
+
+        base_domain = urlparse(base_url).netloc.lower().removeprefix("www.")
+        target_domain = urlparse(target_url).netloc.lower().removeprefix("www.")
+
+        return base_domain == target_domain
+
+    def _find_subpages(self, base_url: str, links) -> list[str]:
+        """Find useful internal business pages from page links."""
+
+        urls = set()
+
+        for link in links:
+            href = link.get("href")
+
+            if not href:
+                continue
+
+            full_url = urljoin(base_url, href)
+
+            if not self._same_domain(base_url, full_url):
+                continue
+
+            if any(
+                keyword in href.lower()
+                for keyword in self.SUBPAGE_KEYWORDS
+            ):
+                urls.add(full_url)
+
+        return sorted(urls)[: self.MAX_SUBPAGES]
+
+    @staticmethod
+    def _merge_data(
+        all_text: list[str],
+        all_emails: set[str],
+        all_phones: set[str],
+        data: dict,
+    ) -> None:
+        """Merge parsed page data into the accumulated result."""
+
+        if data["text"]:
+            all_text.append(data["text"])
+
+        all_emails.update(data["emails"])
+        all_phones.update(data["phones"])
+
     async def scrape_website(self, base_url: str) -> dict:
         """
-        Legacy Playwright scraping path.
+        Scrape the homepage and a small number of useful subpages.
 
-        Parsing is now delegated to HTMLProcessor.
+        HTML parsing is always delegated to HTMLProcessor.
         """
 
         if self.page is None:
@@ -111,25 +147,19 @@ class WebsiteProcessor:
                 "scrape_website() requires a Playwright page."
             )
 
-        logger.info(
-            "Deep scraping website: %s",
-            base_url,
-        )
+        logger.info("Deep scraping website: %s", base_url)
 
-        all_text = []
-        all_emails = set()
-        all_phones = set()
+        all_text: list[str] = []
+        all_emails: set[str] = set()
+        all_phones: set[str] = set()
 
         try:
             # Homepage
             await self._safe_goto(base_url)
-
             await self._dismiss_cookies()
 
-            homepage_html = await self.page.content()
-
             homepage_data = self.process_html(
-                homepage_html
+                await self.page.content()
             )
 
             if len(homepage_data["text"]) < 300:
@@ -138,43 +168,25 @@ class WebsiteProcessor:
                     homepage_data["text"][:200],
                 )
 
-            all_text.append(homepage_data["text"])
-            all_emails.update(homepage_data["emails"])
-            all_phones.update(homepage_data["phones"])
+            self._merge_data(
+                all_text,
+                all_emails,
+                all_phones,
+                homepage_data,
+            )
 
-            # Find useful subpages.
-            subpage_keywords = [
-                "about",
-                "contact",
-                "service",
-                "team",
-            ]
-
+            # Discover useful internal pages.
             links = await self.page.query_selector_all("a")
 
-            urls_to_visit = set()
+            link_data = [
+                {"href": await link.get_attribute("href")}
+                for link in links
+            ]
 
-            for link in links:
-                href = await link.get_attribute("href")
-
-                if not href:
-                    continue
-
-                full_url = urljoin(
-                    base_url,
-                    href,
-                )
-
-                if (
-                    base_url in full_url
-                    and any(
-                        keyword in href.lower()
-                        for keyword in subpage_keywords
-                    )
-                ):
-                    urls_to_visit.add(full_url)
-
-            urls_to_visit = list(urls_to_visit)[:3]
+            urls_to_visit = self._find_subpages(
+                base_url,
+                link_data,
+            )
 
             logger.info(
                 "Found %d subpages: %s",
@@ -182,33 +194,23 @@ class WebsiteProcessor:
                 urls_to_visit,
             )
 
-            # Subpages.
+            # Subpages
             for url in urls_to_visit:
                 try:
-                    logger.info(
-                        "Scraping subpage: %s",
-                        url,
-                    )
+                    logger.info("Scraping subpage: %s", url)
 
                     await self._safe_goto(url)
                     await self._dismiss_cookies()
 
-                    subpage_html = await self.page.content()
-
-                    subpage_data = self.process_html(
-                        subpage_html
+                    page_data = self.process_html(
+                        await self.page.content()
                     )
 
-                    all_text.append(
-                        subpage_data["text"]
-                    )
-
-                    all_emails.update(
-                        subpage_data["emails"]
-                    )
-
-                    all_phones.update(
-                        subpage_data["phones"]
+                    self._merge_data(
+                        all_text,
+                        all_emails,
+                        all_phones,
+                        page_data,
                     )
 
                 except Exception as exc:
@@ -218,21 +220,13 @@ class WebsiteProcessor:
                         exc,
                     )
 
-            final_text = " ".join(
-                all_text
-            )[:15000]
-
             return {
-                "text": final_text,
-                "emails": ", ".join(
-                    sorted(all_emails)
-                ),
-                "phones": ", ".join(
-                    sorted(all_phones)
-                ),
+                "text": " ".join(all_text)[: self.MAX_TEXT_LENGTH],
+                "emails": ", ".join(sorted(all_emails)),
+                "phones": ", ".join(sorted(all_phones)),
             }
 
-        except Exception as exc:
+        except Exception:
             logger.exception(
                 "Fatal error scraping %s",
                 base_url,

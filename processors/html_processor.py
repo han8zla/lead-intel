@@ -1,3 +1,4 @@
+import html as html_lib
 import re
 from typing import Any
 
@@ -33,18 +34,40 @@ class HTMLProcessor:
     }
 
     TOLL_FREE_PREFIXES = {
-        "888",
         "800",
-        "877",
+        "833",
+        "844",
+        "855",
         "866",
+        "877",
+        "888",
     }
 
     EMAIL_PATTERN = re.compile(
         r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
     )
 
+    OBFUSCATED_EMAIL_PATTERN = re.compile(
+        r"([a-zA-Z0-9._%+-]+)\s*(?:\[at\]|\(at\)|\sat\s)"
+        r"\s*([a-zA-Z0-9.-]+)\s*(?:\[dot\]|\(dot\)|\sdot\s)"
+        r"\s*([a-zA-Z]{2,})",
+        re.IGNORECASE,
+    )
+
     PHONE_PATTERN = re.compile(
-        r"(\+?1?\s*[-.\)]?\s*\(?\d{3}\)?\s*[-.\s]?\d{3}\s*[-.\s]?\d{4})"
+        r"""
+        (?<!\d)
+        (
+            (?:\+?1[\s.-]?)?
+            \(?\d{3}\)?
+            [\s.-]?
+            \d{3}
+            [\s.-]?
+            \d{4}
+        )
+        (?!\d)
+        """,
+        re.VERBOSE,
     )
 
     REMOVE_TAGS = (
@@ -58,31 +81,29 @@ class HTMLProcessor:
     def process(self, html: str) -> dict[str, Any]:
         """
         Parse raw HTML and return structured data.
-
-        Args:
-            html: Raw HTML source.
-
-        Returns:
-            {
-                "text": str,
-                "emails": list[str],
-                "phones": list[str],
-            }
-
-        Raises:
-            ValueError: If HTML is empty or invalid.
         """
 
         if not html or not html.strip():
             raise ValueError("HTML content cannot be empty.")
 
+        # Keep a copy before removing script/style/etc.
+        original_html = html
+
         soup = self._build_soup(html)
+
+        emails = self._extract_emails(
+            soup,
+            original_html,
+        )
 
         self._remove_junk(soup)
 
         text = self._extract_text(soup)
-        emails = self._extract_emails(soup, html)
-        phones = self._extract_phones(soup, text)
+
+        phones = self._extract_phones(
+            soup,
+            text,
+        )
 
         return {
             "text": text,
@@ -91,41 +112,27 @@ class HTMLProcessor:
         }
 
     def _build_soup(self, html: str) -> BeautifulSoup:
-        """
-        Build the BeautifulSoup document.
-
-        lxml is preferred because it is fast and tolerant of
-        imperfect HTML.
-        """
-
         try:
             return BeautifulSoup(html, "lxml")
         except Exception:
-            # Fallback parser in case lxml isn't available.
             return BeautifulSoup(html, "html.parser")
 
     def _remove_junk(self, soup: BeautifulSoup) -> None:
-        """
-        Remove elements that are unlikely to contain useful
-        business information.
-        """
-
         for tag in soup.find_all(self.REMOVE_TAGS):
             tag.decompose()
 
-        # Remove inline hidden elements.
         for tag in soup.find_all(
             True,
             attrs={
                 "style": lambda value: (
                     value
-                    and "display:none" in value.replace(" ", "").lower()
+                    and "display:none"
+                    in value.replace(" ", "").lower()
                 )
             },
         ):
             tag.decompose()
 
-        # Remove elements explicitly hidden from assistive technology.
         for tag in soup.find_all(
             True,
             attrs={"aria-hidden": "true"},
@@ -133,14 +140,16 @@ class HTMLProcessor:
             tag.decompose()
 
     def _extract_text(self, soup: BeautifulSoup) -> str:
-        """Extract normalized visible text."""
-
         text = soup.get_text(
             separator=" ",
             strip=True,
         )
 
-        return re.sub(r"\s+", " ", text).strip()
+        return re.sub(
+            r"\s+",
+            " ",
+            text,
+        ).strip()
 
     def _extract_emails(
         self,
@@ -148,17 +157,27 @@ class HTMLProcessor:
         html: str,
     ) -> list[str]:
         """
-        Extract emails using two strategies:
+        Extract emails from multiple locations.
 
-        1. mailto links — higher confidence
-        2. regex over HTML — catches emails not represented
-           as mailto links
+        Priority:
+
+        1. mailto links
+        2. normal HTML
+        3. attributes
+        4. obfuscated email formats
         """
 
         high_confidence = set()
+        candidates = set()
 
-        # First: explicit mailto links.
-        for tag in soup.find_all("a", href=True):
+        # --------------------------------------------------
+        # 1. mailto links
+        # --------------------------------------------------
+
+        for tag in soup.find_all(
+            "a",
+            href=True,
+        ):
             href = tag["href"].strip()
 
             if href.lower().startswith("mailto:"):
@@ -169,39 +188,107 @@ class HTMLProcessor:
                     .lower()
                 )
 
-                if email and self._is_valid_email_candidate(email):
+                if self._is_valid_email_candidate(email):
                     high_confidence.add(email)
 
-        # Second: regex extraction.
-        regex_emails = set(
-            match.lower()
-            for match in self.EMAIL_PATTERN.findall(html)
-        )
+        # --------------------------------------------------
+        # 2. Normal email regex over original HTML
+        # --------------------------------------------------
 
-        filtered_regex = {
+        for match in self.EMAIL_PATTERN.findall(html):
+            candidates.add(
+                html_lib.unescape(match).lower()
+            )
+
+        # --------------------------------------------------
+        # 3. Search HTML attributes
+        # --------------------------------------------------
+
+        for tag in soup.find_all(True):
+            for value in tag.attrs.values():
+
+                if isinstance(value, list):
+                    values = value
+                else:
+                    values = [value]
+
+                for item in values:
+                    if not isinstance(item, str):
+                        continue
+
+                    for match in self.EMAIL_PATTERN.findall(item):
+                        candidates.add(
+                            html_lib.unescape(
+                                match
+                            ).lower()
+                        )
+
+        # --------------------------------------------------
+        # 4. Obfuscated emails
+        # --------------------------------------------------
+
+        for match in self.OBFUSCATED_EMAIL_PATTERN.findall(
+            html_lib.unescape(html)
+        ):
+            email = (
+                f"{match[0]}@{match[1]}.{match[2]}"
+            ).lower()
+
+            candidates.add(email)
+
+        # --------------------------------------------------
+        # Validate
+        # --------------------------------------------------
+
+        filtered = {
             email
-            for email in regex_emails
+            for email in candidates
             if self._is_valid_email_candidate(email)
         }
 
-        # Preserve high-confidence emails first.
-        result = list(high_confidence)
+        result = sorted(high_confidence)
 
-        for email in sorted(filtered_regex):
+        for email in sorted(filtered):
             if email not in high_confidence:
                 result.append(email)
 
         return result
 
-    def _is_valid_email_candidate(self, email: str) -> bool:
-        """Filter obvious third-party/tracking emails."""
+    def _is_valid_email_candidate(
+        self,
+        email: str,
+    ) -> bool:
+        """
+        Filter obvious third-party/tracking emails.
+        """
 
-        email_lower = email.lower()
+        if not email:
+            return False
 
-        return not any(
-            ghost_domain in email_lower
-            for ghost_domain in self.GHOST_EMAIL_DOMAINS
-        )
+        email = email.strip().lower()
+
+        if "@" not in email:
+            return False
+
+        if email.count("@") != 1:
+            return False
+
+        local, domain = email.split("@", 1)
+
+        if not local or not domain:
+            return False
+
+        if "." not in domain:
+            return False
+
+        if any(
+            domain == ghost
+            or domain.endswith("." + ghost)
+            for ghost in self.GHOST_EMAIL_DOMAINS
+        ):
+            return False
+
+        return True
 
     def _extract_phones(
         self,
@@ -212,55 +299,68 @@ class HTMLProcessor:
         Extract phone numbers.
 
         tel: links receive priority.
-        Regex extraction provides a fallback.
+        Visible-text regex provides fallback.
         """
 
         high_confidence = set()
 
-        # First: explicit tel links.
-        for tag in soup.find_all("a", href=True):
+        # --------------------------------------------------
+        # 1. tel links
+        # --------------------------------------------------
+
+        for tag in soup.find_all(
+            "a",
+            href=True,
+        ):
             href = tag["href"].strip()
 
             if href.lower().startswith("tel:"):
                 phone = href[4:].strip()
 
-                if phone and not self._is_toll_free(phone):
+                if (
+                    phone
+                    and not self._is_toll_free(phone)
+                ):
                     high_confidence.add(phone)
 
-        # Second: regex over visible text.
+        # --------------------------------------------------
+        # 2. Visible text
+        # --------------------------------------------------
+
         regex_phones = set(
             match.strip()
             for match in self.PHONE_PATTERN.findall(text)
         )
 
-        filtered_regex = {
+        filtered = {
             phone
             for phone in regex_phones
             if not self._is_toll_free(phone)
         }
 
-        result = list(high_confidence)
+        result = sorted(high_confidence)
 
-        for phone in sorted(filtered_regex):
+        for phone in sorted(filtered):
             if phone not in high_confidence:
                 result.append(phone)
 
         return result
 
-    def _is_toll_free(self, phone: str) -> bool:
-        """
-        Determine whether a phone number begins with one of
-        our excluded toll-free prefixes.
-        """
-
+    def _is_toll_free(
+        self,
+        phone: str,
+    ) -> bool:
         normalized = re.sub(
             r"[^0-9]",
             "",
             phone,
         )
 
-        # Handle +1XXXXXXXXXX / 1XXXXXXXXXX.
-        if len(normalized) == 11 and normalized.startswith("1"):
+        # +1XXXXXXXXXX / 1XXXXXXXXXX
+        if (
+            len(normalized) == 11
+            and normalized.startswith("1")
+        ):
             normalized = normalized[1:]
 
         if len(normalized) < 10:

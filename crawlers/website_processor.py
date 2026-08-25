@@ -14,16 +14,13 @@ logger = get_logger(__name__)
 
 
 class WebsiteProcessor:
-    """
-    Handles browser-based website scraping and delegates HTML parsing
-    to HTMLProcessor.
-    """
+    """Handles browser-based website fetching and HTML parsing."""
 
     SUBPAGE_KEYWORDS = (
-        "about",
         "contact",
-        "service",
+        "about",
         "team",
+        "service",
     )
 
     COOKIE_SELECTORS = (
@@ -47,30 +44,24 @@ class WebsiteProcessor:
 
     async def _dismiss_cookies(self) -> None:
         """Attempt to dismiss a common cookie-consent popup."""
-
         if self.page is None:
             return
 
         for selector in self.COOKIE_SELECTORS:
             try:
                 button = await self.page.query_selector(selector)
-
                 if button:
                     await button.click()
                     logger.info("Dismissed cookie consent popup.")
                     await asyncio.sleep(1)
                     return
-
             except Exception:
                 continue
 
     async def _safe_goto(self, url: str) -> None:
-        """Navigate to a URL while tolerating page-load timeouts."""
-
+        """Navigate while tolerating page-load timeouts."""
         if self.page is None:
-            raise RuntimeError(
-                "Cannot navigate without a browser page."
-            )
+            raise RuntimeError("Cannot navigate without a browser page.")
 
         try:
             await self.page.goto(
@@ -80,8 +71,7 @@ class WebsiteProcessor:
             )
         except PlaywrightTimeoutError:
             logger.warning(
-                "Page load timed out for %s; "
-                "continuing with partial load.",
+                "Page load timed out for %s; continuing with partial load.",
                 url,
             )
 
@@ -90,35 +80,53 @@ class WebsiteProcessor:
     @staticmethod
     def _same_domain(base_url: str, target_url: str) -> bool:
         """Return True when both URLs belong to the same hostname."""
-
         base_domain = urlparse(base_url).netloc.lower().removeprefix("www.")
         target_domain = urlparse(target_url).netloc.lower().removeprefix("www.")
-
         return base_domain == target_domain
 
     def _find_subpages(self, base_url: str, links) -> list[str]:
-        """Find useful internal business pages from page links."""
+        """Find and prioritize useful internal business pages."""
+        priority_keywords = {
+            "contact": 0,
+            "about": 1,
+            "team": 2,
+            "service": 3,
+        }
 
-        urls = set()
+        candidates: dict[str, int] = {}
 
         for link in links:
             href = link.get("href")
+            text = link.get("text", "")
 
             if not href:
                 continue
 
-            full_url = urljoin(base_url, href)
+            href = href.strip()
+            if href.startswith(("#", "mailto:", "tel:", "javascript:")):
+                continue
 
+            full_url = urljoin(base_url, href)
             if not self._same_domain(base_url, full_url):
                 continue
 
-            if any(
-                keyword in href.lower()
-                for keyword in self.SUBPAGE_KEYWORDS
-            ):
-                urls.add(full_url)
+            combined = f"{href} {text}".lower()
+            matched_priorities = [
+                priority
+                for keyword, priority in priority_keywords.items()
+                if keyword in combined
+            ]
 
-        return sorted(urls)[: self.MAX_SUBPAGES]
+            if matched_priorities:
+                candidates[full_url] = min(matched_priorities)
+
+        return [
+            url
+            for url, _ in sorted(
+                candidates.items(),
+                key=lambda item: (item[1], item[0]),
+            )[: self.MAX_SUBPAGES]
+        ]
 
     @staticmethod
     def _merge_data(
@@ -128,24 +136,37 @@ class WebsiteProcessor:
         data: dict,
     ) -> None:
         """Merge parsed page data into the accumulated result."""
-
-        if data["text"]:
+        if data.get("text"):
             all_text.append(data["text"])
+        all_emails.update(data.get("emails", []))
+        all_phones.update(data.get("phones", []))
 
-        all_emails.update(data["emails"])
-        all_phones.update(data["phones"])
+    async def scrape_page(self, url: str) -> dict:
+        """Fetch one page with Playwright and parse its rendered HTML."""
+        if self.page is None:
+            raise RuntimeError("scrape_page() requires a Playwright page.")
+
+        logger.info("Playwright fetching page: %s", url)
+        await self._safe_goto(url)
+        await self._dismiss_cookies()
+
+        html = await self.page.content()
+        data = self.process_html(html)
+
+        logger.info(
+            "Playwright extracted page %s: emails=%d phones=%d text=%d",
+            url,
+            len(data.get("emails", [])),
+            len(data.get("phones", [])),
+            len(data.get("text", "")),
+        )
+
+        return data
 
     async def scrape_website(self, base_url: str) -> dict:
-        """
-        Scrape the homepage and a small number of useful subpages.
-
-        HTML parsing is always delegated to HTMLProcessor.
-        """
-
+        """Scrape the homepage and prioritized internal business pages."""
         if self.page is None:
-            raise RuntimeError(
-                "scrape_website() requires a Playwright page."
-            )
+            raise RuntimeError("scrape_website() requires a Playwright page.")
 
         logger.info("Deep scraping website: %s", base_url)
 
@@ -154,18 +175,12 @@ class WebsiteProcessor:
         all_phones: set[str] = set()
 
         try:
-            # Homepage
-            await self._safe_goto(base_url)
-            await self._dismiss_cookies()
+            homepage_data = await self.scrape_page(base_url)
 
-            homepage_data = self.process_html(
-                await self.page.content()
-            )
-
-            if len(homepage_data["text"]) < 300:
+            if len(homepage_data.get("text", "")) < 300:
                 logger.warning(
                     "Homepage text is very short: %r",
-                    homepage_data["text"][:200],
+                    homepage_data.get("text", "")[:200],
                 )
 
             self._merge_data(
@@ -175,44 +190,32 @@ class WebsiteProcessor:
                 homepage_data,
             )
 
-            # Discover useful internal pages.
             links = await self.page.query_selector_all("a")
-
             link_data = [
-                {"href": await link.get_attribute("href")}
+                {
+                    "href": await link.get_attribute("href"),
+                    "text": await link.inner_text(),
+                }
                 for link in links
             ]
 
-            urls_to_visit = self._find_subpages(
-                base_url,
-                link_data,
-            )
+            urls_to_visit = self._find_subpages(base_url, link_data)
 
             logger.info(
-                "Found %d subpages: %s",
+                "Found %d prioritized subpages: %s",
                 len(urls_to_visit),
                 urls_to_visit,
             )
 
-            # Subpages
             for url in urls_to_visit:
                 try:
-                    logger.info("Scraping subpage: %s", url)
-
-                    await self._safe_goto(url)
-                    await self._dismiss_cookies()
-
-                    page_data = self.process_html(
-                        await self.page.content()
-                    )
-
+                    page_data = await self.scrape_page(url)
                     self._merge_data(
                         all_text,
                         all_emails,
                         all_phones,
                         page_data,
                     )
-
                 except Exception as exc:
                     logger.warning(
                         "Failed to scrape subpage %s: %s",
@@ -227,13 +230,5 @@ class WebsiteProcessor:
             }
 
         except Exception:
-            logger.exception(
-                "Fatal error scraping %s",
-                base_url,
-            )
-
-            return {
-                "text": "",
-                "emails": "",
-                "phones": "",
-            }
+            logger.exception("Fatal error scraping %s", base_url)
+            return {"text": "", "emails": "", "phones": ""}

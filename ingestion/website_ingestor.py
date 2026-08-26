@@ -71,9 +71,11 @@ class WebsiteIngestor:
         all_text = []
         all_emails = set()
         all_phones = set()
+        pages = []
 
         homepage_data = self.website_processor.process_html(homepage_html)
         self._merge_data(all_text, all_emails, all_phones, homepage_data)
+        pages.append(url)
 
         subpages = self._find_subpages(url, homepage_html)
         logger.info(
@@ -92,6 +94,7 @@ class WebsiteIngestor:
                 if quality.usable:
                     subpage_data = self.website_processor.process_html(subpage_html)
                     self._merge_data(all_text, all_emails, all_phones, subpage_data)
+                    pages.append(subpage_url)
                     continue
 
                 logger.warning(
@@ -112,6 +115,7 @@ class WebsiteIngestor:
                 )
                 subpage_data = await self.website_processor.scrape_page(subpage_url)
                 self._merge_data(all_text, all_emails, all_phones, subpage_data)
+                pages.append(subpage_url)
                 used_playwright = True
 
             except Exception as exc:
@@ -121,6 +125,7 @@ class WebsiteIngestor:
             "text": " ".join(all_text)[:15000],
             "emails": sorted(all_emails),
             "phones": sorted(all_phones),
+            "pages": pages,
             "method": "http+playwright" if used_playwright else "http",
         }
 
@@ -163,5 +168,6 @@ class WebsiteIngestor:
             "text": data["text"],
             "emails": data["emails"].split(", ") if data["emails"] else [],
             "phones": data["phones"].split(", ") if data["phones"] else [],
+            "pages": data.get("pages", []),
             "method": "playwright",
         }

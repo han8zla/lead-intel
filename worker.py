@@ -1,7 +1,9 @@
 import asyncio
+import json
 
 from crawlers.enrichment_engine import EnrichmentEngine
 from ingestion.website_ingestor import WebsiteIngestor
+from processors.business_analyzer import BusinessAnalyzer
 from core.database import Database
 from core.models import RawLead
 from utils.logger import get_logger
@@ -13,7 +15,9 @@ logger = get_logger(__name__)
 
 async def main():
     db = Database()
+    db.setup_tables()
     engine = EnrichmentEngine(min_delay=5, max_delay=10)
+    analyzer = BusinessAnalyzer()
 
     logger.info("Starting Worker...")
 
@@ -33,14 +37,8 @@ async def main():
             lead_id = lead_row["id"]
             source_url = lead_row["source_url"]
 
-            logger.info(
-                f"Picked up Lead ID {lead_id}: {source_url}"
-            )
-
-            db.update_lead_status(
-                lead_id,
-                "PROCESSING"
-            )
+            logger.info("Picked up Lead ID %s: %s", lead_id, source_url)
+            db.update_lead_status(lead_id, "PROCESSING")
 
             lead = RawLead(
                 company_name=lead_row["company_name"] or "",
@@ -50,7 +48,6 @@ async def main():
             )
 
             try:
-                # STEP 1: Find the actual website URL
                 enriched_lead = await engine.enrich_lead(lead)
                 final_website = enriched_lead.website or "NOT_FOUND"
 
@@ -61,29 +58,12 @@ async def main():
                     company_name=enriched_lead.company_name,
                 )
 
-                logger.info(
-                    f"Enriched Lead ID {lead_id}. "
-                    f"Website: {final_website}"
-                )
-
-                # STEP 2: Ingest the website
-                scraped_data = {
-                    "text": "",
-                    "emails": [],
-                    "phones": [],
-                }
+                scraped_data = {"text": "", "emails": [], "phones": [], "method": "none"}
 
                 if final_website != "NOT_FOUND":
-                    logger.info(
-                        f"Starting website ingestion "
-                        f"for Lead ID {lead_id}..."
-                    )
+                    logger.info("Starting website ingestion for Lead ID %s...", lead_id)
+                    scraped_data = await ingestor.ingest(final_website)
 
-                    scraped_data = await ingestor.ingest(
-                        final_website
-                    )
-
-                # STEP 3: Save extracted data
                 db.update_lead_scraped_data(
                     lead_id,
                     emails=", ".join(scraped_data["emails"]),
@@ -91,11 +71,20 @@ async def main():
                     text=scraped_data["text"],
                 )
 
-                # STEP 4: Determine final status
-                if (
-                    not scraped_data["emails"]
-                    and not scraped_data["phones"]
-                ):
+                # Analyze the captured website content. The analyzer is deterministic
+                # and creates a transparent baseline for the later AI opportunity layer.
+                analysis = analyzer.analyze(
+                    final_website,
+                    scraped_data.get("text", ""),
+                    scraped_data.get("text", ""),
+                )
+                db.update_lead_analysis(
+                    lead_id,
+                    opportunity_score=analysis["opportunity_score"],
+                    opportunity_data=json.dumps(analysis),
+                )
+
+                if not scraped_data["emails"] and not scraped_data["phones"]:
                     final_status = "MISSING_DATA"
                 else:
                     final_status = "COMPLETED"
@@ -106,35 +95,27 @@ async def main():
                     website=final_website,
                 )
 
-                logger.info(
-                    f"Finished Lead ID {lead_id}. "
-                    f"Status: {final_status}"
-                )
-
-                # STEP 5: Push to Google Sheets
                 sheets_manager.add_lead(
                     lead_id=lead_id,
-                    company_name=(
-                        enriched_lead.company_name
-                        or "Unknown"
-                    ),
+                    company_name=enriched_lead.company_name or "Unknown",
                     source_url=source_url,
                     website=final_website,
                     emails=scraped_data["emails"],
                     phones=scraped_data["phones"],
                     status=final_status,
+                    text=scraped_data["text"],
+                )
+
+                logger.info(
+                    "Finished Lead ID %s. Status: %s. Opportunity score: %s",
+                    lead_id,
+                    final_status,
+                    analysis["opportunity_score"],
                 )
 
             except Exception as exc:
-                logger.error(
-                    f"Failed Lead ID {lead_id}: {exc}"
-                )
-
-                db.update_lead_status(
-                    lead_id,
-                    "FAILED",
-                    website="ERROR",
-                )
+                logger.exception("Failed Lead ID %s: %s", lead_id, exc)
+                db.update_lead_status(lead_id, "FAILED", website="ERROR")
 
     finally:
         await engine.stop()

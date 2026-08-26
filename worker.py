@@ -28,14 +28,12 @@ async def main():
     try:
         while True:
             lead_row = db.get_next_pending()
-
             if not lead_row:
                 await asyncio.sleep(10)
                 continue
 
             lead_id = lead_row["id"]
             source_url = lead_row["source_url"]
-
             logger.info("Picked up Lead ID %s: %s", lead_id, source_url)
             db.update_lead_status(lead_id, "PROCESSING")
 
@@ -49,7 +47,6 @@ async def main():
             try:
                 enriched_lead = await engine.enrich_lead(lead)
                 final_website = enriched_lead.website or "NOT_FOUND"
-
                 db.update_lead_status(
                     lead_id,
                     "ENRICHED",
@@ -58,13 +55,8 @@ async def main():
                 )
 
                 scraped_data = {
-                    "text": "",
-                    "emails": [],
-                    "phones": [],
-                    "pages": [],
-                    "method": "none",
+                    "text": "", "emails": [], "phones": [], "pages": [], "method": "none"
                 }
-
                 if final_website != "NOT_FOUND":
                     logger.info("Starting website ingestion for Lead ID %s...", lead_id)
                     scraped_data = await ingestor.ingest(final_website)
@@ -83,11 +75,20 @@ async def main():
                 )
 
                 logger.info(
-                    "Business Analysis: score=%s signals=%s opportunities=%s",
+                    "Business Analysis: business=%s industry=%s score=%s",
+                    analysis["business_name"],
+                    analysis["industry"],
                     analysis["opportunity_score"],
-                    analysis["signals"],
-                    analysis["opportunities"],
                 )
+                logger.info("Business Signals: %s", analysis["signals"])
+                for opportunity in analysis["opportunities"]:
+                    logger.info(
+                        "Opportunity [%s] %s: %s (confidence=%.2f)",
+                        opportunity["priority"].upper(),
+                        opportunity["title"],
+                        opportunity["description"],
+                        opportunity["confidence"],
+                    )
 
                 db.update_lead_analysis(
                     lead_id,
@@ -95,20 +96,12 @@ async def main():
                     opportunity_data=json.dumps(analysis),
                 )
 
-                if not scraped_data["emails"] and not scraped_data["phones"]:
-                    final_status = "MISSING_DATA"
-                else:
-                    final_status = "COMPLETED"
-
-                db.update_lead_status(
-                    lead_id,
-                    final_status,
-                    website=final_website,
-                )
+                final_status = "MISSING_DATA" if not scraped_data["emails"] and not scraped_data["phones"] else "COMPLETED"
+                db.update_lead_status(lead_id, final_status, website=final_website)
 
                 sheets_manager.add_lead(
                     lead_id=lead_id,
-                    company_name=enriched_lead.company_name or "Unknown",
+                    company_name=enriched_lead.company_name or analysis["business_name"] or "Unknown",
                     source_url=source_url,
                     website=final_website,
                     emails=scraped_data["emails"],

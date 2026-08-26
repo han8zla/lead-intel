@@ -20,7 +20,6 @@ async def main():
     analyzer = BusinessAnalyzer()
 
     logger.info("Starting Worker...")
-
     await engine.start()
 
     ingestor = WebsiteIngestor(engine.main_page)
@@ -58,7 +57,12 @@ async def main():
                     company_name=enriched_lead.company_name,
                 )
 
-                scraped_data = {"text": "", "emails": [], "phones": [], "method": "none"}
+                scraped_data = {
+                    "text": "",
+                    "emails": [],
+                    "phones": [],
+                    "method": "none",
+                }
 
                 if final_website != "NOT_FOUND":
                     logger.info("Starting website ingestion for Lead ID %s...", lead_id)
@@ -71,13 +75,16 @@ async def main():
                     text=scraped_data["text"],
                 )
 
-                # Analyze the captured website content. The analyzer is deterministic
-                # and creates a transparent baseline for the later AI opportunity layer.
+                # The current ingestion layer returns normalized text rather than
+                # the original HTML. The analyzer intentionally accepts this text
+                # as its current evidence source; richer page-level evidence can
+                # be added later without changing the worker contract.
                 analysis = analyzer.analyze(
                     final_website,
                     scraped_data.get("text", ""),
                     scraped_data.get("text", ""),
                 )
+
                 db.update_lead_analysis(
                     lead_id,
                     opportunity_score=analysis["opportunity_score"],
@@ -104,6 +111,7 @@ async def main():
                     phones=scraped_data["phones"],
                     status=final_status,
                     text=scraped_data["text"],
+                    opportunity_score=analysis["opportunity_score"],
                 )
 
                 logger.info(

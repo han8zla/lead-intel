@@ -61,6 +61,7 @@ async def main():
                     "text": "",
                     "emails": [],
                     "phones": [],
+                    "pages": [],
                     "method": "none",
                 }
 
@@ -75,14 +76,17 @@ async def main():
                     text=scraped_data["text"],
                 )
 
-                # The current ingestion layer returns normalized text rather than
-                # the original HTML. The analyzer intentionally accepts this text
-                # as its current evidence source; richer page-level evidence can
-                # be added later without changing the worker contract.
                 analysis = analyzer.analyze(
                     final_website,
-                    scraped_data.get("text", ""),
-                    scraped_data.get("text", ""),
+                    text=scraped_data.get("text", ""),
+                    scraped_data=scraped_data,
+                )
+
+                logger.info(
+                    "Business Analysis: score=%s signals=%s opportunities=%s",
+                    analysis["opportunity_score"],
+                    analysis["signals"],
+                    analysis["opportunities"],
                 )
 
                 db.update_lead_analysis(

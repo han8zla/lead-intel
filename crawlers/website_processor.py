@@ -173,6 +173,7 @@ class WebsiteProcessor:
         all_text: list[str] = []
         all_emails: set[str] = set()
         all_phones: set[str] = set()
+        pages: list[str] = []
 
         try:
             homepage_data = await self.scrape_page(base_url)
@@ -189,6 +190,7 @@ class WebsiteProcessor:
                 all_phones,
                 homepage_data,
             )
+            pages.append(base_url)
 
             links = await self.page.query_selector_all("a")
             link_data = [
@@ -216,6 +218,7 @@ class WebsiteProcessor:
                         all_phones,
                         page_data,
                     )
+                    pages.append(url)
                 except Exception as exc:
                     logger.warning(
                         "Failed to scrape subpage %s: %s",
@@ -227,8 +230,9 @@ class WebsiteProcessor:
                 "text": " ".join(all_text)[: self.MAX_TEXT_LENGTH],
                 "emails": ", ".join(sorted(all_emails)),
                 "phones": ", ".join(sorted(all_phones)),
+                "pages": pages,
             }
 
         except Exception:
             logger.exception("Fatal error scraping %s", base_url)
-            return {"text": "", "emails": "", "phones": ""}
+            return {"text": "", "emails": "", "phones": "", "pages": []}

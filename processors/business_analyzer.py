@@ -6,12 +6,7 @@ from bs4 import BeautifulSoup
 
 
 class BusinessAnalyzer:
-    """
-    Produces deterministic website/business intelligence from HTML and text.
-
-    This is a baseline analysis layer. It does not call an AI model and does not
-    make claims about a business that are not supported by the supplied page.
-    """
+    """Baseline deterministic website/business intelligence analyzer."""
 
     SIGNALS = {
         "contact_page": ("/contact", "contact us", "get in touch"),
@@ -35,35 +30,62 @@ class BusinessAnalyzer:
         "no_social_signal": 5,
     }
 
-    def analyze(self, url: str, html: str, text: str = "") -> dict[str, Any]:
-        if not html:
-            return self._empty_result(url)
+    def analyze(
+        self,
+        url: str,
+        html: str = "",
+        text: str = "",
+        scraped_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Analyze either raw HTML or the normalized WebsiteIngestor result."""
+        scraped_data = scraped_data or {}
 
-        soup = BeautifulSoup(html, "lxml")
-        normalized_text = re.sub(r"\s+", " ", text or soup.get_text(" ", strip=True)).strip()
+        if not text:
+            text = str(scraped_data.get("text") or "")
+
+        pages = [str(page) for page in scraped_data.get("pages", []) if page]
+
+        # Raw HTML is preferred when supplied. In the current ingestion pipeline
+        # only normalized text/pages/contact fields may be available, so those
+        # fields are also valid evidence.
+        soup = BeautifulSoup(html, "lxml") if html else BeautifulSoup("", "lxml")
+        normalized_text = re.sub(
+            r"\s+", " ", text or soup.get_text(" ", strip=True)
+        ).strip()
         lower_html = html.lower()
         lower_text = normalized_text.lower()
 
         title = soup.title.get_text(" ", strip=True) if soup.title else ""
         description = ""
-        description_tag = soup.find("meta", attrs={"name": re.compile("^description$", re.I)})
+        description_tag = soup.find(
+            "meta", attrs={"name": re.compile("^description$", re.I)}
+        )
         if description_tag:
             description = str(description_tag.get("content") or "").strip()
 
-        schema_types = self._schema_types(soup)
-        links = [str(tag.get("href") or "") for tag in soup.find_all("a", href=True)]
+        schema_types = self._schema_types(soup) if html else []
+        links = [str(tag.get("href") or "") for tag in soup.find_all("a", href=True)] if html else []
 
-        emails = self._emails(lower_html)
-        phones = self._phone_signal(soup, lower_text)
+        has_email = self._emails(lower_html or lower_text)
+        has_phone = self._phone_signal(soup, lower_text)
+
+        if scraped_data.get("emails"):
+            has_email = True
+        if scraped_data.get("phones"):
+            has_phone = True
+
+        has_contact_page = self._has_any(
+            lower_text, self.SIGNALS["contact_page"]
+        ) or any("/contact" in page.lower() for page in pages)
 
         signals = {
-            "contact_page": self._has_any(lower_text, self.SIGNALS["contact_page"]),
+            "contact_page": has_contact_page,
             "booking": self._has_any(lower_text, self.SIGNALS["booking"]),
             "lead_form": bool(soup.find("form")) or self._has_any(lower_text, self.SIGNALS["lead_form"]),
-            "phone": phones,
-            "email": emails,
+            "phone": has_phone,
+            "email": has_email,
             "services": self._has_any(lower_text, self.SIGNALS["services"]),
-            "social": self._has_any(lower_html, self.SIGNALS["social"]),
+            "social": self._has_any(lower_html or lower_text, self.SIGNALS["social"]),
             "ecommerce": self._has_any(lower_text, self.SIGNALS["ecommerce"]),
             "reviews": self._has_any(lower_text, self.SIGNALS["reviews"]),
         }
@@ -83,6 +105,7 @@ class BusinessAnalyzer:
             "opportunities": opportunities,
             "content_length": len(normalized_text),
             "link_count": len(links),
+            "pages_analyzed": pages,
         }
 
     @staticmethod
@@ -97,6 +120,7 @@ class BusinessAnalyzer:
             "opportunities": [],
             "content_length": 0,
             "link_count": 0,
+            "pages_analyzed": [],
         }
 
     @staticmethod
@@ -104,14 +128,24 @@ class BusinessAnalyzer:
         return any(pattern in value for pattern in patterns)
 
     @staticmethod
-    def _emails(html: str) -> bool:
-        return bool(re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", html))
+    def _emails(value: str) -> bool:
+        return bool(
+            re.search(
+                r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
+                value,
+            )
+        )
 
     @staticmethod
     def _phone_signal(soup: BeautifulSoup, text: str) -> bool:
         if soup.find("a", href=re.compile(r"^tel:", re.I)):
             return True
-        return bool(re.search(r"(?<!\d)\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?!\d)", text))
+        return bool(
+            re.search(
+                r"(?<!\d)\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?!\d)",
+                text,
+            )
+        )
 
     @staticmethod
     def _schema_types(soup: BeautifulSoup) -> list[str]:
@@ -136,7 +170,11 @@ class BusinessAnalyzer:
 
         return sorted(types)
 
-    def _score(self, signals: dict[str, bool], text_length: int) -> tuple[int, list[str]]:
+    def _score(
+        self,
+        signals: dict[str, bool],
+        text_length: int,
+    ) -> tuple[int, list[str]]:
         score = 0
         opportunities = []
 

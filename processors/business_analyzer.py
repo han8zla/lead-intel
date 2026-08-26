@@ -4,9 +4,11 @@ from typing import Any
 
 from bs4 import BeautifulSoup
 
+from processors.opportunity_detector import OpportunityDetector
+
 
 class BusinessAnalyzer:
-    """Baseline deterministic website/business intelligence analyzer."""
+    """Deterministic business intelligence layer for scraped websites."""
 
     SIGNALS = {
         "contact_page": ("/contact", "contact us", "get in touch"),
@@ -30,6 +32,9 @@ class BusinessAnalyzer:
         "no_social_signal": 5,
     }
 
+    def __init__(self) -> None:
+        self.opportunity_detector = OpportunityDetector()
+
     def analyze(
         self,
         url: str,
@@ -37,46 +42,30 @@ class BusinessAnalyzer:
         text: str = "",
         scraped_data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Analyze either raw HTML or the normalized WebsiteIngestor result."""
         scraped_data = scraped_data or {}
-
         if not text:
             text = str(scraped_data.get("text") or "")
 
         pages = [str(page) for page in scraped_data.get("pages", []) if page]
-
-        # Raw HTML is preferred when supplied. In the current ingestion pipeline
-        # only normalized text/pages/contact fields may be available, so those
-        # fields are also valid evidence.
         soup = BeautifulSoup(html, "lxml") if html else BeautifulSoup("", "lxml")
-        normalized_text = re.sub(
-            r"\s+", " ", text or soup.get_text(" ", strip=True)
-        ).strip()
+        normalized_text = re.sub(r"\s+", " ", text or soup.get_text(" ", strip=True)).strip()
         lower_html = html.lower()
         lower_text = normalized_text.lower()
 
         title = soup.title.get_text(" ", strip=True) if soup.title else ""
         description = ""
-        description_tag = soup.find(
-            "meta", attrs={"name": re.compile("^description$", re.I)}
-        )
+        description_tag = soup.find("meta", attrs={"name": re.compile("^description$", re.I)})
         if description_tag:
             description = str(description_tag.get("content") or "").strip()
 
         schema_types = self._schema_types(soup) if html else []
         links = [str(tag.get("href") or "") for tag in soup.find_all("a", href=True)] if html else []
 
-        has_email = self._emails(lower_html or lower_text)
-        has_phone = self._phone_signal(soup, lower_text)
-
-        if scraped_data.get("emails"):
-            has_email = True
-        if scraped_data.get("phones"):
-            has_phone = True
-
-        has_contact_page = self._has_any(
-            lower_text, self.SIGNALS["contact_page"]
-        ) or any("/contact" in page.lower() for page in pages)
+        has_email = self._emails(lower_html or lower_text) or bool(scraped_data.get("emails"))
+        has_phone = self._phone_signal(soup, lower_text) or bool(scraped_data.get("phones"))
+        has_contact_page = self._has_any(lower_text, self.SIGNALS["contact_page"]) or any(
+            "/contact" in page.lower() for page in pages
+        )
 
         signals = {
             "contact_page": has_contact_page,
@@ -90,18 +79,33 @@ class BusinessAnalyzer:
             "reviews": self._has_any(lower_text, self.SIGNALS["reviews"]),
         }
 
-        opportunity_score, opportunities = self._score(
+        business_name = self._business_name(title, normalized_text, url)
+        industry = self._industry(normalized_text, schema_types)
+        services = self._services(normalized_text)
+
+        opportunity_score, baseline = self._score(signals, len(normalized_text))
+        opportunities = self.opportunity_detector.detect(
             signals=signals,
-            text_length=len(normalized_text),
+            text=normalized_text,
+            pages=pages,
+            industry=industry,
         )
+
+        # The detector is the primary actionable score. Keep the baseline as
+        # diagnostic context rather than mixing two unrelated scoring systems.
+        actionable_score = min(100, sum(int(item["score"]) for item in opportunities))
 
         return {
             "url": url,
+            "business_name": business_name,
+            "industry": industry,
+            "services": services,
             "title": title,
             "description": description,
             "schema_types": schema_types,
             "signals": signals,
-            "opportunity_score": opportunity_score,
+            "opportunity_score": actionable_score,
+            "baseline_score": baseline,
             "opportunities": opportunities,
             "content_length": len(normalized_text),
             "link_count": len(links),
@@ -109,19 +113,42 @@ class BusinessAnalyzer:
         }
 
     @staticmethod
-    def _empty_result(url: str) -> dict[str, Any]:
-        return {
-            "url": url,
-            "title": "",
-            "description": "",
-            "schema_types": [],
-            "signals": {},
-            "opportunity_score": 0,
-            "opportunities": [],
-            "content_length": 0,
-            "link_count": 0,
-            "pages_analyzed": [],
-        }
+    def _business_name(title: str, text: str, url: str) -> str:
+        if title:
+            cleaned = re.split(r"\s+[|–-]\s+", title)[0].strip()
+            if cleaned:
+                return cleaned
+        match = re.search(r"(?:welcome to|about)\s+([A-Z][A-Za-z0-9 &'.,-]{2,60})", text, re.I)
+        if match:
+            return match.group(1).strip(" .,")
+        host = url.split("//")[-1].split("/")[0].removeprefix("www.")
+        return host.split(".")[0].replace("-", " ").replace("_", " ").title()
+
+    @staticmethod
+    def _industry(text: str, schema_types: list[str]) -> str:
+        value = f"{text} {' '.join(schema_types)}".lower()
+        if any(word in value for word in ("medicalclinic", "medical", "physician", "doctor", "healthcare", "telemedicine", "primary care")):
+            return "healthcare"
+        if any(word in value for word in ("real estate", "realtor", "property management", "homes for sale")):
+            return "real_estate"
+        if any(word in value for word in ("ecommerce", "add to cart", "checkout", "shop now")):
+            return "ecommerce"
+        if any(word in value for word in ("law firm", "attorney", "legal services")):
+            return "legal"
+        if any(word in value for word in ("accounting", "bookkeeping", "tax preparation")):
+            return "accounting"
+        if any(word in value for word in ("plumbing", "electrician", "handyman", "roofing", "hvac", "contractor")):
+            return "home_services"
+        return "unknown"
+
+    @staticmethod
+    def _services(text: str) -> list[str]:
+        patterns = (
+            "primary care", "telemedicine", "family medicine", "urgent care",
+            "consulting", "bookkeeping", "accounting", "real estate",
+            "property management", "plumbing", "electrical", "roofing", "hvac",
+        )
+        return [pattern for pattern in patterns if pattern in text.lower()]
 
     @staticmethod
     def _has_any(value: str, patterns: tuple[str, ...]) -> bool:
@@ -129,23 +156,13 @@ class BusinessAnalyzer:
 
     @staticmethod
     def _emails(value: str) -> bool:
-        return bool(
-            re.search(
-                r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
-                value,
-            )
-        )
+        return bool(re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", value))
 
     @staticmethod
     def _phone_signal(soup: BeautifulSoup, text: str) -> bool:
         if soup.find("a", href=re.compile(r"^tel:", re.I)):
             return True
-        return bool(
-            re.search(
-                r"(?<!\d)\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?!\d)",
-                text,
-            )
-        )
+        return bool(re.search(r"(?<!\d)\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?!\d)", text))
 
     @staticmethod
     def _schema_types(soup: BeautifulSoup) -> list[str]:
@@ -158,52 +175,28 @@ class BusinessAnalyzer:
                 data = json.loads(raw)
             except (json.JSONDecodeError, TypeError):
                 continue
-
             items = data if isinstance(data, list) else [data]
             for item in items:
-                if isinstance(item, dict):
-                    schema_type = item.get("@type")
-                    if isinstance(schema_type, list):
-                        types.update(str(value) for value in schema_type)
-                    elif schema_type:
-                        types.add(str(schema_type))
-
+                if isinstance(item, dict) and item.get("@type"):
+                    value = item["@type"]
+                    types.update(str(x) for x in value) if isinstance(value, list) else types.add(str(value))
         return sorted(types)
 
-    def _score(
-        self,
-        signals: dict[str, bool],
-        text_length: int,
-    ) -> tuple[int, list[str]]:
+    def _score(self, signals: dict[str, bool], text_length: int) -> tuple[int, list[str]]:
         score = 0
         opportunities = []
-
         if not signals.get("email"):
-            score += self.OPPORTUNITY_WEIGHTS["missing_email"]
-            opportunities.append("No visible email signal detected")
-
+            score += 20; opportunities.append("No visible email signal detected")
         if not signals.get("phone"):
-            score += self.OPPORTUNITY_WEIGHTS["missing_phone"]
-            opportunities.append("No visible phone signal detected")
-
+            score += 10; opportunities.append("No visible phone signal detected")
         if not signals.get("contact_page"):
-            score += self.OPPORTUNITY_WEIGHTS["missing_contact_page"]
-            opportunities.append("No clear contact-page signal detected")
-
+            score += 10; opportunities.append("No clear contact-page signal detected")
         if not signals.get("booking") and not signals.get("lead_form"):
-            score += self.OPPORTUNITY_WEIGHTS["no_booking_or_lead_form"]
-            opportunities.append("No clear booking or lead form signal detected")
-
+            score += 15; opportunities.append("No clear booking or lead form signal detected")
         if text_length < 500:
-            score += self.OPPORTUNITY_WEIGHTS["weak_content"]
-            opportunities.append("Website has limited visible text")
-
+            score += 10; opportunities.append("Website has limited visible text")
         if not signals.get("services"):
-            score += self.OPPORTUNITY_WEIGHTS["no_services_signal"]
-            opportunities.append("No clear services signal detected")
-
+            score += 5; opportunities.append("No clear services signal detected")
         if not signals.get("social"):
-            score += self.OPPORTUNITY_WEIGHTS["no_social_signal"]
-            opportunities.append("No major social-profile signal detected")
-
+            score += 5; opportunities.append("No major social-profile signal detected")
         return min(score, 100), opportunities

@@ -17,9 +17,12 @@
         .btn-green { background: #28a745; }
         .btn-green:hover { background: #218838; }
         .result { margin-top: 20px; padding: 15px; background: #e9ecef; border-radius: 5px; display: none; }
+        .nav { max-width: 800px; margin: 0 auto 20px; text-align: right; }
+        .nav a { color: #007bff; text-decoration: none; font-weight: 600; }
     </style>
 </head>
 <body>
+    <div class="nav"><a href="/dashboard">📊 Open Dashboard</a></div>
     <h1>🚀 Lead Intelligence Platform</h1>
 
     <!-- AUTOMATED LINK INTAKE -->
@@ -27,8 +30,7 @@
         <h2>🤖 Automated Intake (Bot Processes)</h2>
         <form id="leadForm">
             <label>Paste Links (Google Maps, Yelp, or Website URLs - one per line):</label>
-            <textarea id="links" class="links-box" placeholder="https://maps.google.com/...
-https://www.yelp.com/biz/..."></textarea>
+            <textarea id="links" class="links-box" placeholder="https://maps.google.com/...\nhttps://www.yelp.com/biz/..."></textarea>
             <button type="submit" class="btn-blue">Add to Bot Queue</button>
         </form>
         <div class="result" id="resultBox1">
@@ -43,7 +45,7 @@ https://www.yelp.com/biz/..."></textarea>
         <form id="htmlForm">
             <label>Website URL (for records):</label>
             <input type="text" id="manual_url" placeholder="https://the-blocked-website.com/" required>
-            
+
             <label>Raw HTML Source Code:</label>
             <textarea id="raw_html" class="html-box" placeholder="<!DOCTYPE html><html>..."></textarea>
             <button type="submit" class="btn-green">Process HTML Directly</button>
@@ -54,7 +56,6 @@ https://www.yelp.com/biz/..."></textarea>
     </div>
 
     <script>
-        // Automated Link Submission
         document.getElementById('leadForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const resultBox = document.getElementById('resultBox1');
@@ -70,7 +71,6 @@ https://www.yelp.com/biz/..."></textarea>
             } catch (e) { resultText.innerText = "⚠️ Error connecting to server."; }
         });
 
-        // Manual HTML Submission
         document.getElementById('htmlForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const resultBox = document.getElementById('resultBox2');

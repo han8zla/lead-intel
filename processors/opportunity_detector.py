@@ -1,191 +1,207 @@
-from __future__ import annotations
-
-import re
 from typing import Any
 
 
 class OpportunityDetector:
-    """Turn website evidence into distinct, sales-relevant opportunities."""
+    """Rule-based detector for commercially meaningful automation opportunities."""
 
     def detect(
         self,
         *,
         signals: dict[str, bool],
-        text: str,
+        text: str = "",
         pages: list[str] | None = None,
         industry: str = "unknown",
     ) -> list[dict[str, Any]]:
         pages = pages or []
-        normalized = re.sub(r"\s+", " ", text or "").strip().lower()
+        text_lower = text.lower()
         opportunities: list[dict[str, Any]] = []
 
         def add(
-            kind: str,
+            type_: str,
             title: str,
-            description: str,
-            evidence: list[str],
+            priority: str,
             impact: int,
-            confidence: float,
+            confidence: int,
+            evidence: list[str],
+            recommendation: str,
         ) -> None:
-            evidence = [item for item in evidence if item]
-            evidence_factor = min(1.0, 0.65 + (0.10 * max(0, len(evidence) - 1)))
-            score = round(impact * confidence * evidence_factor)
-            opportunities.append(
-                {
-                    "type": kind,
-                    "title": title,
-                    "description": description,
-                    "evidence": evidence,
-                    "score": max(1, min(100, score)),
-                    "confidence": round(confidence, 2),
-                    "impact": impact,
-                    "priority": "high" if score >= 60 else "medium" if score >= 35 else "low",
-                }
+            if not evidence:
+                return
+            score = round(impact * (confidence / 100))
+            opportunities.append({
+                "type": type_,
+                "title": title,
+                "priority": priority,
+                "score": score,
+                "impact": impact,
+                "confidence": confidence,
+                "evidence": evidence,
+                "recommendation": recommendation,
+            })
+
+        booking = signals.get("booking", False)
+        form = signals.get("lead_form", False)
+        contact = signals.get("contact_page", False)
+        services = signals.get("services", False)
+        email = signals.get("email", False)
+        phone = signals.get("phone", False)
+        reviews = signals.get("reviews", False)
+        review_cta = signals.get("review_cta", False)
+        newsletter = signals.get("newsletter", False)
+        live_chat = signals.get("live_chat", False)
+        ecommerce = signals.get("ecommerce", False)
+
+        contact_page = self._page_hint(pages, "contact")
+        booking_hint = self._page_hint(pages, "book", "appointment", "schedule")
+
+        # A booking workflow is distinct from inquiry capture. If a booking
+        # capability exists, recommend downstream automation rather than a
+        # redundant "add a form" opportunity.
+        if booking:
+            evidence = ["Appointment/booking capability detected"]
+            if booking_hint:
+                evidence.append(f"Booking-related page analyzed: {booking_hint}")
+            if email or phone:
+                evidence.append("Direct contact channel available for confirmations/follow-up")
+            if industry == "healthcare":
+                evidence.append("Healthcare business: appointment reminders and no-show recovery are high-impact workflows")
+            add(
+                "appointment_follow_up",
+                "Appointment Follow-up Automation",
+                "high" if industry == "healthcare" else "medium",
+                95 if industry == "healthcare" else 82,
+                92 if booking_hint else 82,
+                evidence,
+                "Automate confirmations, reminders, rescheduling prompts, no-show recovery and post-appointment follow-up.",
             )
 
-        # Booking is an appointment/conversion workflow, not a lead-capture
-        # opportunity. Keeping these rules separate prevents duplicate sales ideas.
-        if signals.get("booking"):
-            booking_evidence = ["Appointment/booking capability detected"]
-            if signals.get("phone") or signals.get("email"):
-                booking_evidence.append("Direct contact channel detected")
-            if industry in {"healthcare", "medical"}:
-                booking_evidence.append("Healthcare/medical industry detected")
-                add(
-                    "appointment_follow_up",
-                    "Appointment Follow-up Automation",
-                    "The website can receive appointments, creating a concrete opportunity for confirmations, reminders, no-show recovery, and post-appointment follow-up.",
-                    booking_evidence,
-                    impact=95,
-                    confidence=0.90,
-                )
-            else:
-                add(
-                    "appointment_follow_up",
-                    "Appointment Follow-up Automation",
-                    "The website can receive appointments, creating a potential workflow for confirmations, reminders, rescheduling, and follow-up.",
-                    booking_evidence,
-                    impact=88,
-                    confidence=0.86,
-                )
+        # Existing inquiry capture means the opportunity is what happens AFTER
+        # submission, not installing another lead form.
+        if form:
+            evidence = ["Website inquiry/contact form detected"]
+            if contact_page:
+                evidence.append(f"Form/contact workflow appears on {contact_page}")
+            if email or phone:
+                evidence.append("Direct contact channel available for routing and follow-up")
+            add(
+                "inquiry_follow_up",
+                "Inquiry Follow-up Automation",
+                "high" if email or phone else "medium",
+                86,
+                90 if contact_page else 78,
+                evidence,
+                "Route new inquiries automatically, send an immediate acknowledgement, qualify the request and trigger timed follow-ups.",
+            )
 
-        # A form is evidence of lead capture already existing. We do not call
-        # the form itself an opportunity. The opportunity is what can happen
-        # after submission: routing, qualification and follow-up.
-        if signals.get("lead_form"):
-            form_evidence = ["Lead/inquiry form detected"]
-            if signals.get("email"):
-                form_evidence.append("Email channel detected")
-            if signals.get("phone"):
-                form_evidence.append("Phone channel detected")
-            if not signals.get("booking"):
-                add(
-                    "inquiry_follow_up",
-                    "Inquiry Follow-up Automation",
-                    "The website already captures inquiries, creating an opportunity to automatically acknowledge, qualify, route, and follow up with new submissions.",
-                    form_evidence,
-                    impact=82,
-                    confidence=0.88,
-                )
-            else:
-                add(
-                    "lead_routing",
-                    "Lead Routing & Qualification",
-                    "The website has both appointment and inquiry conversion paths, creating an opportunity to route and qualify requests before they reach staff.",
-                    form_evidence + ["Booking capability also detected"],
-                    impact=78,
-                    confidence=0.82,
-                )
-        elif signals.get("contact_page") and not signals.get("booking"):
+        # Only recommend lead capture when there is no detectable existing form
+        # or booking path. This fixes the previous false-positive overlap.
+        if contact and not form and not booking and (services or email or phone):
+            evidence = ["Contact page/content detected", "No dedicated inquiry form or booking path detected"]
+            if services:
+                evidence.append("Services are presented without a clear digital conversion path")
             add(
                 "lead_capture",
                 "Lead Capture / Inquiry Workflow",
-                "A contact path exists, but no dedicated inquiry form was confidently detected. A structured inquiry workflow could make it easier to capture, qualify, and route prospects.",
-                ["Contact page detected", "No dedicated lead/inquiry form detected"],
-                impact=72,
-                confidence=0.78,
+                "high" if services else "medium",
+                88 if services else 72,
+                84,
+                evidence,
+                "Add a structured inquiry path and route submissions into a measurable lead workflow.",
             )
 
-        # Contact workflow is only raised when there is a real routing gap;
-        # having an email and phone number alone is not treated as a problem.
-        if signals.get("contact_page") and signals.get("email") and signals.get("phone") and not signals.get("lead_form") and not signals.get("booking"):
-            add(
-                "contact_routing",
-                "Contact Routing & Response Workflow",
-                "Multiple contact channels are available, but there is no detected structured conversion path. Centralized routing and response automation could reduce manual handling.",
-                [
-                    "Contact page detected",
-                    "Email detected",
-                    "Phone detected",
-                    "No booking or lead form detected",
-                ],
-                impact=68,
-                confidence=0.76,
-            )
-
-        # Website conversion opportunity: only flag it when there is something
-        # meaningful to convert (services) and the site lacks a clear CTA path.
-        if signals.get("services") and not signals.get("booking") and not signals.get("lead_form"):
+        # Conversion optimization is only suggested when the website clearly
+        # sells/provides services but has a weak digital conversion path.
+        if services and not form and not booking and not live_chat:
+            evidence = ["Services/treatments/solutions detected", "No booking, inquiry form or live-chat conversion path detected"]
             add(
                 "website_conversion",
-                "Website Conversion Improvement",
-                "Services are presented without a detected booking or inquiry conversion path, leaving a potential gap between visitor interest and action.",
-                [
-                    "Services signal detected",
-                    "No booking capability detected",
-                    "No lead/inquiry form detected",
-                ],
-                impact=70,
-                confidence=0.80,
+                "Website Conversion Optimization",
+                "medium",
+                76,
+                82,
+                evidence,
+                "Create a clearer primary call-to-action and low-friction conversion path for high-intent visitors.",
             )
 
-        # Reputation is useful when there is evidence of reputation to leverage;
-        # missing social media by itself is deliberately not a major opportunity.
-        if signals.get("reviews") and not signals.get("review_cta"):
+        if form and not newsletter:
+            evidence = ["Website already captures visitor information through an inquiry form", "No newsletter/subscriber workflow detected"]
+            add(
+                "lead_nurture",
+                "Lead Nurture Automation",
+                "medium",
+                74,
+                72,
+                evidence,
+                "Turn captured inquiries into a structured nurture sequence while keeping sales follow-up timely and relevant.",
+            )
+
+        if reviews and not review_cta:
+            evidence = ["Reviews/testimonials detected", "No explicit review-request CTA detected"]
             add(
                 "reputation_marketing",
-                "Reputation & Review Marketing",
-                "Reviews or testimonials are present, creating an opportunity to turn existing proof into stronger conversion and follow-up assets.",
-                ["Reviews/testimonials detected", "No clear review CTA detected"],
-                impact=55,
-                confidence=0.72,
+                "Reputation & Review Automation",
+                "medium",
+                68,
+                76,
+                evidence,
+                "Automate post-service review requests and route positive/negative feedback appropriately.",
             )
 
-        if signals.get("newsletter") and not signals.get("lead_form"):
-            add(
-                "nurture_automation",
-                "Email Nurture Automation",
-                "The website offers an audience-capture mechanism that could support automated nurture sequences and re-engagement.",
-                ["Newsletter/email subscription signal detected"],
-                impact=60,
-                confidence=0.76,
-            )
-
-        if signals.get("live_chat"):
-            add(
-                "chat_automation",
-                "Website Chat Automation",
-                "A live-chat channel is present, creating potential for automated first response, qualification, routing, and after-hours handling.",
-                ["Live-chat signal detected"],
-                impact=58,
-                confidence=0.74,
-            )
-
-        if signals.get("ecommerce"):
+        if ecommerce:
+            evidence = ["Ecommerce/transaction capability detected"]
             add(
                 "ecommerce_automation",
-                "E-commerce Follow-up Automation",
-                "The website has e-commerce signals, creating potential for abandoned-cart, order-status, review-request, and customer re-engagement workflows.",
-                ["E-commerce capability detected"],
-                impact=78,
-                confidence=0.84,
+                "Customer & Order Automation",
+                "medium",
+                80,
+                86,
+                evidence,
+                "Automate order notifications, abandoned-cart recovery, customer follow-up and post-purchase workflows.",
             )
 
-        if signals.get("social") and signals.get("reviews"):
-            # No score: this is useful context for outreach, not necessarily a gap.
-            pass
+        if newsletter and not form:
+            evidence = ["Newsletter/subscriber capture detected", "No inquiry form detected"]
+            add(
+                "newsletter_nurture",
+                "Subscriber Nurture Automation",
+                "medium",
+                64,
+                74,
+                evidence,
+                "Automate welcome, segmentation and nurture sequences for subscribers.",
+            )
 
+        # Social absence is deliberately not an opportunity by itself. A
+        # reputation/social recommendation needs another business signal.
+        if signals.get("social") and reviews and not review_cta:
+            evidence = ["Social presence detected", "Reviews/testimonials detected", "No explicit review-request CTA detected"]
+            add(
+                "social_reputation",
+                "Social & Reputation Workflow",
+                "low",
+                58,
+                65,
+                evidence,
+                "Connect social proof and review requests into a consistent reputation workflow.",
+            )
+
+        # De-duplicate by opportunity type and return strongest first.
+        unique: dict[str, dict[str, Any]] = {}
+        for item in opportunities:
+            current = unique.get(item["type"])
+            if current is None or item["score"] > current["score"]:
+                unique[item["type"]] = item
+
+        priority_order = {"high": 0, "medium": 1, "low": 2}
         return sorted(
-            opportunities,
-            key=lambda item: (-int(item["score"]), item["type"]),
+            unique.values(),
+            key=lambda item: (-item["score"], priority_order.get(item["priority"], 9)),
         )
+
+    @staticmethod
+    def _page_hint(pages: list[str], *keywords: str) -> str:
+        for page in pages:
+            lower = page.lower()
+            if any(keyword in lower for keyword in keywords):
+                return page
+        return ""

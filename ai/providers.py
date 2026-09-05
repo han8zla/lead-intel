@@ -6,7 +6,6 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
 
 
 class AIProviderError(RuntimeError):
@@ -35,12 +34,7 @@ class ProviderConfig:
 
 
 class OpenAICompatibleProvider:
-    """Small dependency-free adapter for OpenAI-compatible chat APIs.
-
-    Groq exposes an OpenAI-compatible endpoint, so the same adapter can be
-    reused for Groq, OpenRouter, or another compatible provider by changing
-    configuration rather than application code.
-    """
+    """Dependency-free adapter for OpenAI-compatible chat APIs."""
 
     def __init__(self, config: ProviderConfig):
         self.config = config
@@ -68,31 +62,20 @@ class OpenAICompatibleProvider:
             "Authorization": f"Bearer {self.config.api_key}",
             "Content-Type": "application/json",
         }
-
         try:
             response = await asyncio.to_thread(self._request, endpoint, body, headers)
         except AIProviderError:
             raise
         except Exception as exc:
-            raise AIProviderError(
-                f"{self.config.name} request failed: {exc}",
-                retryable=True,
-            ) from exc
+            raise AIProviderError(f"{self.config.name} request failed: {exc}", retryable=True) from exc
 
         try:
             data = json.loads(response)
             text = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-            raise AIProviderError(
-                f"{self.config.name} returned an unexpected response",
-                retryable=False,
-            ) from exc
+            raise AIProviderError(f"{self.config.name} returned an unexpected response", retryable=False) from exc
 
-        return AIResponse(
-            text=str(text).strip(),
-            provider=self.config.name,
-            model=self.config.model,
-        )
+        return AIResponse(text=str(text).strip(), provider=self.config.name, model=self.config.model)
 
     def _request(self, endpoint: str, body: bytes, headers: dict[str, str]) -> str:
         request = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
@@ -112,38 +95,60 @@ class OpenAICompatibleProvider:
                 status_code=exc.code,
             ) from exc
         except (urllib.error.URLError, TimeoutError) as exc:
-            raise AIProviderError(
-                f"{self.config.name} network/timeout error: {exc}",
-                retryable=True,
-            ) from exc
+            raise AIProviderError(f"{self.config.name} network/timeout error: {exc}", retryable=True) from exc
 
 
-def provider_from_env(prefix: str, *, default_base_url: str = "") -> OpenAICompatibleProvider | None:
-    """Build a provider from environment variables.
-
-    Required variables: <PREFIX>_API_KEY and <PREFIX>_MODEL.
-    Optional: <PREFIX>_BASE_URL and <PREFIX>_TIMEOUT.
-    """
+def _base_provider_config(prefix: str, *, default_base_url: str = "") -> tuple[str, str, float] | None:
     api_key = os.getenv(f"{prefix}_API_KEY", "").strip()
-    model = os.getenv(f"{prefix}_MODEL", "").strip()
-    if not api_key or not model:
+    if not api_key:
         return None
-
     base_url = os.getenv(f"{prefix}_BASE_URL", default_base_url).strip()
     if not base_url:
         raise ValueError(f"{prefix}_BASE_URL is required for provider {prefix}")
-
     try:
         timeout = float(os.getenv(f"{prefix}_TIMEOUT", "45"))
     except ValueError:
         timeout = 45.0
+    return api_key, base_url, timeout
 
-    return OpenAICompatibleProvider(
-        ProviderConfig(
-            name=prefix.lower(),
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
-            timeout=timeout,
+
+def provider_from_env(prefix: str, *, default_base_url: str = "") -> OpenAICompatibleProvider | None:
+    """Build one provider using the first configured model.
+
+    For model failover, prefer ``providers_from_env``. ``<PREFIX>_MODEL`` is
+    retained for backward compatibility with existing installations.
+    """
+    providers = providers_from_env(prefix, default_base_url=default_base_url)
+    return providers[0] if providers else None
+
+
+def providers_from_env(prefix: str, *, default_base_url: str = "") -> list[OpenAICompatibleProvider]:
+    """Build a provider pool from comma-separated model configuration.
+
+    ``<PREFIX>_MODELS`` accepts an ordered comma-separated list. The older
+    singular ``<PREFIX>_MODEL`` remains supported and becomes a one-model pool.
+    """
+    config = _base_provider_config(prefix, default_base_url=default_base_url)
+    if config is None:
+        return []
+    api_key, base_url, timeout = config
+    raw_models = os.getenv(f"{prefix}_MODELS", "").strip()
+    if not raw_models:
+        raw_models = os.getenv(f"{prefix}_MODEL", "").strip()
+    models = []
+    for model in raw_models.split(","):
+        model = model.strip()
+        if model and model not in models:
+            models.append(model)
+    return [
+        OpenAICompatibleProvider(
+            ProviderConfig(
+                name=f"{prefix.lower()}:{model}",
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                timeout=timeout,
+            )
         )
-    )
+        for model in models
+    ]

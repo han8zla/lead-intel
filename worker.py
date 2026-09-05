@@ -23,6 +23,7 @@ async def main():
 
     logger.info("Starting Worker...")
     logger.info("AI personalization available: %s", personalizer.router.available)
+    logger.info("Configured AI models: %s", personalizer.router.models())
     await engine.start()
     ingestor = WebsiteIngestor(engine.main_page)
     sheets_manager = GoogleSheetsManager()
@@ -77,14 +78,22 @@ async def main():
                         opportunity["confidence"],
                     )
 
-                # AI is generation-only here: it creates a draft but never sends
-                # an email. The provider router automatically fails over between
-                # configured compatible providers when a provider is rate-limited.
+                # AI creates a draft only; it never sends an email here.
+                # AIRouter automatically moves to the next configured model
+                # or provider when the current one is rate-limited/unavailable.
                 if personalizer.router.available and analysis["opportunities"]:
                     try:
                         draft = await personalizer.generate(analysis=analysis)
                         analysis["personalized_email"] = draft
-                        logger.info("Generated AI outreach draft for Lead ID %s", lead_id)
+                        if personalizer.last_response:
+                            analysis["ai_provider"] = personalizer.last_response.provider
+                            analysis["ai_model"] = personalizer.last_response.model
+                            logger.info(
+                                "Generated AI outreach draft for Lead ID %s using %s / %s",
+                                lead_id,
+                                personalizer.last_response.provider,
+                                personalizer.last_response.model,
+                            )
                     except Exception as ai_exc:
                         analysis["personalized_email_error"] = str(ai_exc)
                         logger.warning("AI personalization failed for Lead ID %s: %s", lead_id, ai_exc)

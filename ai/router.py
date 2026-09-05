@@ -56,8 +56,11 @@ class AIRouter:
             )
 
         last_error: AIProviderError | None = None
-        states = self._ordered_available()
-        for state in states:
+        available_states = self._ordered_available()
+        if not available_states:
+            raise AIProviderError("All configured AI models are temporarily cooling down", retryable=True)
+
+        for state in available_states:
             try:
                 response = await state.provider.generate(
                     system=system,
@@ -83,6 +86,4 @@ class AIRouter:
 
     def _ordered_available(self) -> list[ProviderState]:
         now = time.monotonic()
-        available = [state for state in self.providers if state.cooldown_until <= now]
-        cooling = [state for state in self.providers if state.cooldown_until > now]
-        return available + cooling
+        return [state for state in self.providers if state.cooldown_until <= now]

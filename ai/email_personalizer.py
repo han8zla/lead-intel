@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .providers import AIResponse
 from .router import AIRouter
 
 
@@ -11,6 +12,7 @@ class EmailPersonalizer:
 
     def __init__(self, router: AIRouter | None = None):
         self.router = router or AIRouter()
+        self.last_response: AIResponse | None = None
 
     async def generate(
         self,
@@ -51,4 +53,5 @@ class EmailPersonalizer:
             temperature=0.45,
             max_tokens=500,
         )
+        self.last_response = response
         return response.text

@@ -160,6 +160,63 @@ class Database:
         conn.close()
         return lead
 
+    def get_dashboard_leads(self, limit: int = 100):
+        """Return recent leads with their stored analysis for the dashboard."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, company_name, location, source_url, website, status,
+                   extracted_emails, extracted_phones, opportunity_score,
+                   opportunity_data, created_at, updated_at
+            FROM leads
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (max(1, min(limit, 500)),),
+        )
+        rows = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return rows
+
+    def get_dashboard_stats(self):
+        """Return high-level counts used by the dashboard cards."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) FROM leads")
+        total = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM leads WHERE status = 'PENDING'")
+        pending = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM leads WHERE status = 'PROCESSING'")
+        processing = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM leads WHERE status = 'COMPLETED'")
+        completed = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM leads WHERE status = 'FAILED'")
+        failed = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM leads WHERE opportunity_score >= 7")
+        high_opportunity = cursor.fetchone()[0]
+
+        cursor.execute("SELECT AVG(opportunity_score) FROM leads WHERE opportunity_score IS NOT NULL")
+        average_score = cursor.fetchone()[0]
+
+        conn.close()
+
+        return {
+            "total": total,
+            "pending": pending,
+            "processing": processing,
+            "completed": completed,
+            "failed": failed,
+            "high_opportunity": high_opportunity,
+            "average_score": round(average_score, 1) if average_score is not None else None,
+        }
+
 
 if __name__ == "__main__":
     db = Database()

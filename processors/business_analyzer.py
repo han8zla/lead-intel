@@ -10,26 +10,48 @@ from processors.opportunity_detector import OpportunityDetector
 class BusinessAnalyzer:
     """Deterministic business intelligence layer for scraped websites."""
 
-    SIGNALS = {
-        "contact_page": ("/contact", "contact us", "get in touch"),
-        "booking": ("book online", "book an appointment", "schedule", "appointment"),
-        "lead_form": ("contact form", "request a quote", "request information", "get started"),
-        "phone": ("tel:", "call us", "phone:"),
-        "email": ("mailto:", "@"),
-        "services": ("services", "our services", "what we do"),
-        "social": ("facebook.com", "instagram.com", "linkedin.com", "youtube.com"),
-        "ecommerce": ("add to cart", "cart", "checkout", "shop now", "buy now"),
-        "reviews": ("reviews", "testimonials", "google reviews"),
-    }
-
-    OPPORTUNITY_WEIGHTS = {
-        "missing_email": 20,
-        "missing_phone": 10,
-        "missing_contact_page": 10,
-        "no_booking_or_lead_form": 15,
-        "weak_content": 10,
-        "no_services_signal": 5,
-        "no_social_signal": 5,
+    SIGNAL_PATTERNS = {
+        "contact_page": (
+            "contact us", "contact page", "get in touch", "contact information",
+            "contact details", "reach us", "contact/",
+        ),
+        "booking": (
+            "book online", "book an appointment", "schedule an appointment",
+            "schedule a consultation", "schedule your appointment", "appointment request",
+            "appointments", "make an appointment", "book now", "reserve now",
+        ),
+        "lead_form": (
+            "contact form", "inquiry form", "enquiry form", "request a quote",
+            "request information", "request info", "get a quote", "get started",
+            "submit your inquiry", "send us a message", "send message",
+            "tell us about your", "request an appointment",
+        ),
+        "services": (
+            "our services", "services", "what we do", "treatments", "specialties",
+            "solutions", "service areas",
+        ),
+        "social": (
+            "facebook.com", "instagram.com", "linkedin.com", "youtube.com",
+            "tiktok.com", "x.com/", "twitter.com",
+        ),
+        "ecommerce": (
+            "add to cart", "shopping cart", "checkout", "shop now", "buy now",
+            "product catalog", "products",
+        ),
+        "reviews": (
+            "reviews", "testimonials", "google reviews", "patient reviews",
+            "customer reviews", "what our clients say",
+        ),
+        "newsletter": (
+            "newsletter", "subscribe to our", "subscribe for updates", "email updates",
+            "join our mailing list",
+        ),
+        "live_chat": (
+            "live chat", "chat with us", "chat now", "online chat", "start a chat",
+        ),
+        "review_cta": (
+            "leave a review", "write a review", "review us", "review on google",
+        ),
     }
 
     def __init__(self) -> None:
@@ -51,6 +73,7 @@ class BusinessAnalyzer:
         normalized_text = re.sub(r"\s+", " ", text or soup.get_text(" ", strip=True)).strip()
         lower_html = html.lower()
         lower_text = normalized_text.lower()
+        combined = f"{lower_html} {lower_text}"
 
         title = soup.title.get_text(" ", strip=True) if soup.title else ""
         description = ""
@@ -61,29 +84,46 @@ class BusinessAnalyzer:
         schema_types = self._schema_types(soup) if html else []
         links = [str(tag.get("href") or "") for tag in soup.find_all("a", href=True)] if html else []
 
-        has_email = self._emails(lower_html or lower_text) or bool(scraped_data.get("emails"))
+        has_email = self._emails(combined) or bool(scraped_data.get("emails"))
         has_phone = self._phone_signal(soup, lower_text) or bool(scraped_data.get("phones"))
-        has_contact_page = self._has_any(lower_text, self.SIGNALS["contact_page"]) or any(
-            "/contact" in page.lower() for page in pages
-        )
+        has_contact_page = self._contact_signal(lower_text, pages)
+
+        # When HTML is available, use the DOM. In the worker the ingestor may
+        # only return text, so use a conservative text-based form heuristic too.
+        form_detected = bool(soup.find("form")) if html else False
+        text_form_detected = self._text_form_signal(lower_text)
+        has_lead_form = form_detected or text_form_detected or bool(scraped_data.get("lead_forms"))
 
         signals = {
             "contact_page": has_contact_page,
-            "booking": self._has_any(lower_text, self.SIGNALS["booking"]),
-            "lead_form": bool(soup.find("form")) or self._has_any(lower_text, self.SIGNALS["lead_form"]),
+            "booking": self._booking_signal(combined),
+            "lead_form": has_lead_form,
             "phone": has_phone,
             "email": has_email,
-            "services": self._has_any(lower_text, self.SIGNALS["services"]),
-            "social": self._has_any(lower_html or lower_text, self.SIGNALS["social"]),
-            "ecommerce": self._has_any(lower_text, self.SIGNALS["ecommerce"]),
-            "reviews": self._has_any(lower_text, self.SIGNALS["reviews"]),
+            "services": self._has_any(combined, self.SIGNAL_PATTERNS["services"]),
+            "social": self._has_any(combined, self.SIGNAL_PATTERNS["social"]),
+            "ecommerce": self._has_any(combined, self.SIGNAL_PATTERNS["ecommerce"]),
+            "reviews": self._has_any(combined, self.SIGNAL_PATTERNS["reviews"]),
+            "newsletter": self._has_any(combined, self.SIGNAL_PATTERNS["newsletter"]),
+            "live_chat": self._has_any(combined, self.SIGNAL_PATTERNS["live_chat"]),
+            "review_cta": self._has_any(combined, self.SIGNAL_PATTERNS["review_cta"]),
         }
+
+        # Explicit evidence makes every boolean auditable by the UI and useful
+        # to the later AI outreach layer.
+        signal_evidence = self._signal_evidence(
+            signals=signals,
+            text=lower_text,
+            pages=pages,
+            form_detected=form_detected,
+            text_form_detected=text_form_detected,
+            scraped_data=scraped_data,
+        )
 
         business_name = self._business_name(title, normalized_text, url)
         industry = self._industry(normalized_text, schema_types)
         services = self._services(normalized_text)
 
-        opportunity_score, baseline = self._score(signals, len(normalized_text))
         opportunities = self.opportunity_detector.detect(
             signals=signals,
             text=normalized_text,
@@ -91,9 +131,10 @@ class BusinessAnalyzer:
             industry=industry,
         )
 
-        # The detector is the primary actionable score. Keep the baseline as
-        # diagnostic context rather than mixing two unrelated scoring systems.
-        actionable_score = min(100, sum(int(item["score"]) for item in opportunities))
+        # Overall score measures the strength of actionable opportunities, not
+        # the number of missing website features. This prevents "no Instagram"
+        # from artificially making a company look like a great sales target.
+        opportunity_score = self._overall_score(opportunities)
 
         return {
             "url": url,
@@ -104,8 +145,8 @@ class BusinessAnalyzer:
             "description": description,
             "schema_types": schema_types,
             "signals": signals,
-            "opportunity_score": actionable_score,
-            "baseline_score": baseline,
+            "signal_evidence": signal_evidence,
+            "opportunity_score": opportunity_score,
             "opportunities": opportunities,
             "content_length": len(normalized_text),
             "link_count": len(links),
@@ -127,7 +168,10 @@ class BusinessAnalyzer:
     @staticmethod
     def _industry(text: str, schema_types: list[str]) -> str:
         value = f"{text} {' '.join(schema_types)}".lower()
-        if any(word in value for word in ("medicalclinic", "medical", "physician", "doctor", "healthcare", "telemedicine", "primary care")):
+        if any(word in value for word in (
+            "medical clinic", "medicalclinic", "physician", "doctor", "healthcare",
+            "telemedicine", "primary care", "family medicine", "hospital", "dentist",
+        )):
             return "healthcare"
         if any(word in value for word in ("real estate", "realtor", "property management", "homes for sale")):
             return "real_estate"
@@ -137,7 +181,9 @@ class BusinessAnalyzer:
             return "legal"
         if any(word in value for word in ("accounting", "bookkeeping", "tax preparation")):
             return "accounting"
-        if any(word in value for word in ("plumbing", "electrician", "handyman", "roofing", "hvac", "contractor")):
+        if any(word in value for word in (
+            "plumbing", "electrician", "handyman", "roofing", "hvac", "contractor",
+        )):
             return "home_services"
         return "unknown"
 
@@ -148,7 +194,73 @@ class BusinessAnalyzer:
             "consulting", "bookkeeping", "accounting", "real estate",
             "property management", "plumbing", "electrical", "roofing", "hvac",
         )
-        return [pattern for pattern in patterns if pattern in text.lower()]
+        lower = text.lower()
+        return [pattern for pattern in patterns if pattern in lower]
+
+    @classmethod
+    def _contact_signal(cls, text: str, pages: list[str]) -> bool:
+        return cls._has_any(text, cls.SIGNAL_PATTERNS["contact_page"]) or any(
+            "/contact" in page.lower() or "contact-us" in page.lower() for page in pages
+        )
+
+    @classmethod
+    def _booking_signal(cls, value: str) -> bool:
+        # Avoid treating generic "schedule" mentions as a booking system.
+        return cls._has_any(value, cls.SIGNAL_PATTERNS["booking"])
+
+    @staticmethod
+    def _text_form_signal(text: str) -> bool:
+        # Contact forms often render as plain text after parsing, so the word
+        # "form" is not required. Require several form-field/action markers to
+        # avoid confusing ordinary prose with a form.
+        field_markers = (
+            "your name", "full name", "first name", "last name", "email address",
+            "phone number", "your email", "message", "subject",
+        )
+        action_markers = ("submit", "send message", "send us a message", "get a quote", "request")
+        field_hits = sum(marker in text for marker in field_markers)
+        action_hits = sum(marker in text for marker in action_markers)
+        return field_hits >= 2 and action_hits >= 1
+
+    @classmethod
+    def _signal_evidence(
+        cls,
+        *,
+        signals: dict[str, bool],
+        text: str,
+        pages: list[str],
+        form_detected: bool,
+        text_form_detected: bool,
+        scraped_data: dict[str, Any],
+    ) -> dict[str, list[str]]:
+        evidence: dict[str, list[str]] = {}
+        page_names = [page.rsplit("/", 2)[-2] if "/" in page.rstrip("/") else page for page in pages]
+
+        for name, present in signals.items():
+            if not present:
+                evidence[name] = []
+                continue
+            evidence[name] = [f"{name.replace('_', ' ').title()} signal detected"]
+
+        if signals.get("contact_page"):
+            evidence["contact_page"] = ["Contact page/content detected"]
+            if any("contact" in name.lower() for name in page_names):
+                evidence["contact_page"].append("Contact page included in analyzed pages")
+        if signals.get("booking"):
+            evidence["booking"] = ["Appointment/booking language detected"]
+        if signals.get("lead_form"):
+            evidence["lead_form"] = []
+            if form_detected:
+                evidence["lead_form"].append("HTML form element detected")
+            if text_form_detected:
+                evidence["lead_form"].append("Multiple form-field/action markers detected in visible text")
+            if scraped_data.get("lead_forms"):
+                evidence["lead_form"].append("Lead-form metadata supplied by ingestion")
+        if signals.get("email"):
+            evidence["email"] = [f"{len(scraped_data.get('emails', [])) or 1} email signal(s) detected"]
+        if signals.get("phone"):
+            evidence["phone"] = [f"{len(scraped_data.get('phones', [])) or 1} phone signal(s) detected"]
+        return evidence
 
     @staticmethod
     def _has_any(value: str, patterns: tuple[str, ...]) -> bool:
@@ -182,21 +294,12 @@ class BusinessAnalyzer:
                     types.update(str(x) for x in value) if isinstance(value, list) else types.add(str(value))
         return sorted(types)
 
-    def _score(self, signals: dict[str, bool], text_length: int) -> tuple[int, list[str]]:
-        score = 0
-        opportunities = []
-        if not signals.get("email"):
-            score += 20; opportunities.append("No visible email signal detected")
-        if not signals.get("phone"):
-            score += 10; opportunities.append("No visible phone signal detected")
-        if not signals.get("contact_page"):
-            score += 10; opportunities.append("No clear contact-page signal detected")
-        if not signals.get("booking") and not signals.get("lead_form"):
-            score += 15; opportunities.append("No clear booking or lead form signal detected")
-        if text_length < 500:
-            score += 10; opportunities.append("Website has limited visible text")
-        if not signals.get("services"):
-            score += 5; opportunities.append("No clear services signal detected")
-        if not signals.get("social"):
-            score += 5; opportunities.append("No major social-profile signal detected")
-        return min(score, 100), opportunities
+    @staticmethod
+    def _overall_score(opportunities: list[dict[str, Any]]) -> int:
+        if not opportunities:
+            return 0
+        scores = [max(0, min(100, int(item.get("score", 0)))) for item in opportunities]
+        # Top opportunity matters most; additional independent opportunities add
+        # signal without allowing duplicated rules to push the total to 100.
+        weights = (0.55, 0.30, 0.15)
+        return round(sum(score * weights[i] for i, score in enumerate(scores[:3])))

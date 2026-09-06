@@ -3,23 +3,30 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # Virtual environments
 venv/
 .venv/
 env/
 ENV/
-credentials.json
 
-# Environment variables / secrets
+# Secrets and credentials
 .env
 .env.*
 !.env.example
+credentials.json
+credentials*.json
 
-# Databases
+# Databases and local runtime state
 *.db
 *.sqlite
 *.sqlite3
+data/*.db*
+data/*.sqlite*
 
 # Logs
 *.log
@@ -31,18 +38,18 @@ Thumbs.db
 
 # IDE
 .vscode/
+.idea/
 
 # Generated files
 *.png
 *.jpg
 *.jpeg
+*.webp
 
-# Playwright / browser files
+# Playwright / browser artifacts
 playwright-report/
 test-results/
 
 # Temporary files
 tmp/
 temp/
-data/lead_intelligence.db-shm
-data/lead_intelligence.db-wal

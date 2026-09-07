@@ -5,6 +5,7 @@ from core.database import Database
 from crawlers.website_processor import WebsiteProcessor
 from utils.logger import get_logger
 from utils.google_sheets import GoogleSheetsManager
+import json
 
 
 logger = get_logger(__name__)
@@ -13,18 +14,49 @@ logger = get_logger(__name__)
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 db = Database()
+db.setup_tables()
 sheets_manager = GoogleSheetsManager()
+
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return templates.TemplateResponse(request, "index.html", {"request": request})
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    return templates.TemplateResponse(request, "dashboard.html", {"request": request})
+
+
+@app.get("/api/dashboard")
+async def dashboard_data():
+    """Return dashboard metrics and recent lead analysis."""
+    leads = db.get_dashboard_leads()
+
+    for lead in leads:
+        raw_analysis = lead.get("opportunity_data")
+        if raw_analysis:
+            try:
+                lead["analysis"] = json.loads(raw_analysis)
+            except (TypeError, json.JSONDecodeError):
+                lead["analysis"] = None
+        else:
+            lead["analysis"] = None
+        lead.pop("opportunity_data", None)
+
+    return {
+        "success": True,
+        "stats": db.get_dashboard_stats(),
+        "leads": leads,
+    }
+
 
 @app.post("/enrich")
 async def enrich_lead(request: Request):
     """Accepts a list of URLs for the bot to process"""
     data = await request.json()
     links = data.get("links", [])
-    
+
     if not links:
         return {"success": False, "message": "No links provided."}
 
@@ -35,6 +67,7 @@ async def enrich_lead(request: Request):
             added_count += 1
 
     return {"success": True, "message": f"Added {added_count} links to the bot queue!"}
+
 
 @app.post("/manual-html")
 async def manual_html(request: Request):
@@ -75,7 +108,7 @@ async def manual_html(request: Request):
             "message": str(exc),
         }
 
-    except Exception as exc:
+    except Exception:
         logger.exception(
             "Manual HTML processing failed for %s",
             url,
@@ -195,6 +228,7 @@ async def manual_html(request: Request):
             "text_length": len(cleaned_data["text"]),
         },
     }
+
 
 @app.post("/debug/process-html")
 async def debug_process_html(request: Request):

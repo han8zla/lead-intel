@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lead Intelligence Dashboard</title>
+    <style>
+        :root { --bg:#f5f7fb; --card:#fff; --text:#18212f; --muted:#667085; --line:#e5e7eb; --accent:#2563eb; }
+        * { box-sizing:border-box; }
+        body { margin:0; font-family:Arial,sans-serif; background:var(--bg); color:var(--text); }
+        header { background:#111827; color:#fff; padding:18px 28px; display:flex; justify-content:space-between; align-items:center; }
+        header h1 { margin:0; font-size:21px; }
+        header a { color:#fff; text-decoration:none; opacity:.9; }
+        main { max-width:1250px; margin:0 auto; padding:28px; }
+        .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:24px; }
+        .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; }
+        .label { color:var(--muted); font-size:13px; }
+        .value { font-size:30px; font-weight:700; margin-top:8px; }
+        .section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:20px; }
+        .section-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; }
+        h2 { margin:0; font-size:18px; }
+        button { border:0; background:var(--accent); color:#fff; border-radius:7px; padding:9px 13px; cursor:pointer; }
+        .table-wrap { overflow:auto; }
+        table { width:100%; border-collapse:collapse; min-width:900px; }
+        th,td { text-align:left; padding:12px 10px; border-bottom:1px solid var(--line); vertical-align:top; font-size:13px; }
+        th { color:var(--muted); font-size:12px; text-transform:uppercase; }
+        .score { font-weight:700; padding:5px 9px; border-radius:999px; background:#eef2ff; display:inline-block; }
+        .status { font-size:11px; font-weight:700; padding:5px 8px; border-radius:999px; background:#f2f4f7; }
+        .opp { margin:4px 0; }
+        .opp strong { display:block; }
+        .muted { color:var(--muted); }
+        .empty { padding:30px; text-align:center; color:var(--muted); }
+        .error { color:#b42318; padding:10px 0; }
+        @media(max-width:900px) { .cards { grid-template-columns:repeat(2,1fr); } }
+        @media(max-width:600px) { .cards { grid-template-columns:1fr; } main { padding:16px; } }
+    </style>
+</head>
+<body>
+<header>
+    <h1>Lead Intelligence Dashboard</h1>
+    <a href="/">← Intake</a>
+</header>
+<main>
+    <div id="error" class="error"></div>
+    <section class="cards">
+        <div class="card"><div class="label">Total Leads</div><div id="total" class="value">—</div></div>
+        <div class="card"><div class="label">High Opportunity (7+)</div><div id="high" class="value">—</div></div>
+        <div class="card"><div class="label">Completed</div><div id="completed" class="value">—</div></div>
+        <div class="card"><div class="label">Average Score</div><div id="average" class="value">—</div></div>
+    </section>
+
+    <section class="section">
+        <div class="section-head">
+            <h2>Lead Pipeline</h2>
+            <button onclick="loadDashboard()">Refresh</button>
+        </div>
+        <div class="muted" id="pipeline"></div>
+    </section>
+
+    <section class="section">
+        <div class="section-head">
+            <h2>Recent Leads & Analysis</h2>
+            <span class="muted">Latest 100</span>
+        </div>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Lead</th><th>Status</th><th>Score</th><th>Contact</th><th>Opportunities</th><th>AI Draft</th></tr></thead>
+                <tbody id="leads"></tbody>
+            </table>
+        </div>
+    </section>
+</main>
+<script>
+function esc(value) {
+    return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+}
+function parseEmailDraft(text) {
+    if (!text) return '';
+    return text.replace(/\n/g, '<br>');
+}
+function renderLeads(leads) {
+    const tbody = document.getElementById('leads');
+    if (!leads.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">No leads yet. Add a website from the intake page.</td></tr>';
+        return;
+    }
+    tbody.innerHTML = leads.map(lead => {
+        const analysis = lead.analysis || {};
+        const opportunities = analysis.opportunities || [];
+        const oppHtml = opportunities.length
+            ? opportunities.slice(0,4).map(o => `<div class="opp"><strong>${esc(o.title)}</strong><span class="muted">${esc(o.priority)} · ${esc(o.confidence)} confidence</span></div>`).join('')
+            : '<span class="muted">No opportunity found</span>';
+        const contacts = [lead.extracted_emails, lead.extracted_phones].filter(Boolean).join('<br>');
+        const draft = analysis.personalized_email
+            ? `<details><summary>View draft</summary><div style="margin-top:8px">${parseEmailDraft(analysis.personalized_email)}</div></details>`
+            : '<span class="muted">—</span>';
+        return `<tr>
+            <td><strong>${esc(lead.company_name || analysis.business_name || 'Unknown')}</strong><br><span class="muted">${esc(lead.website || lead.source_url)}</span></td>
+            <td><span class="status">${esc(lead.status)}</span></td>
+            <td>${lead.opportunity_score == null ? '—' : `<span class="score">${esc(lead.opportunity_score)}/10</span>`}</td>
+            <td>${contacts || '<span class="muted">No contact found</span>'}</td>
+            <td>${oppHtml}</td>
+            <td>${draft}</td>
+        </tr>`;
+    }).join('');
+}
+async function loadDashboard() {
+    document.getElementById('error').textContent = '';
+    try {
+        const response = await fetch('/api/dashboard', { cache:'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (!data.success) throw new Error('Dashboard request failed');
+        const s = data.stats;
+        document.getElementById('total').textContent = s.total;
+        document.getElementById('high').textContent = s.high_opportunity;
+        document.getElementById('completed').textContent = s.completed;
+        document.getElementById('average').textContent = s.average_score == null ? '—' : `${s.average_score}/10`;
+        document.getElementById('pipeline').textContent = `Pending: ${s.pending}  ·  Processing: ${s.processing}  ·  Completed: ${s.completed}  ·  Failed: ${s.failed}`;
+        renderLeads(data.leads);
+    } catch (error) {
+        document.getElementById('error').textContent = 'Unable to load dashboard data. Make sure FastAPI is running.';
+    }
+}
+loadDashboard();
+setInterval(loadDashboard, 15000);
+</script>
+</body>
+</html>

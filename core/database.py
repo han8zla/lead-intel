@@ -148,6 +148,15 @@ class Database:
             opportunity_score,
         )
 
+    def get_lead(self, lead_id: int):
+        """Return one complete lead record for the lead detail view."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM leads WHERE id = ?", (lead_id,))
+        lead = cursor.fetchone()
+        conn.close()
+        return dict(lead) if lead else None
+
     def get_lead_by_website(self, website_url: str):
         """Find a lead by website URL."""
         conn = self.get_connection()

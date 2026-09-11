@@ -18,6 +18,19 @@ db.setup_tables()
 sheets_manager = GoogleSheetsManager()
 
 
+def _decode_analysis(lead):
+    raw_analysis = lead.get("opportunity_data")
+    if raw_analysis:
+        try:
+            lead["analysis"] = json.loads(raw_analysis)
+        except (TypeError, json.JSONDecodeError):
+            lead["analysis"] = None
+    else:
+        lead["analysis"] = None
+    lead.pop("opportunity_data", None)
+    return lead
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     return templates.TemplateResponse(request, "index.html", {"request": request})
@@ -31,24 +44,21 @@ async def dashboard(request: Request):
 @app.get("/api/dashboard")
 async def dashboard_data():
     """Return dashboard metrics and recent lead analysis."""
-    leads = db.get_dashboard_leads()
-
-    for lead in leads:
-        raw_analysis = lead.get("opportunity_data")
-        if raw_analysis:
-            try:
-                lead["analysis"] = json.loads(raw_analysis)
-            except (TypeError, json.JSONDecodeError):
-                lead["analysis"] = None
-        else:
-            lead["analysis"] = None
-        lead.pop("opportunity_data", None)
-
+    leads = [_decode_analysis(lead) for lead in db.get_dashboard_leads()]
     return {
         "success": True,
         "stats": db.get_dashboard_stats(),
         "leads": leads,
     }
+
+
+@app.get("/api/leads/{lead_id}")
+async def lead_detail(lead_id: int):
+    """Return one complete lead and its stored intelligence."""
+    lead = db.get_lead(lead_id)
+    if not lead:
+        return {"success": False, "message": "Lead not found."}
+    return {"success": True, "lead": _decode_analysis(lead)}
 
 
 @app.post("/enrich")
@@ -71,135 +81,53 @@ async def enrich_lead(request: Request):
 
 @app.post("/manual-html")
 async def manual_html(request: Request):
-    """
-    Accept raw HTML supplied by the user and process it
-    through the same HTML pipeline used by automatic scraping.
-    """
-
+    """Accept raw HTML and process it through the automatic HTML pipeline."""
     data = await request.json()
-
     url = data.get("url", "").strip()
     html = data.get("html", "")
 
     if not url:
-        return {
-            "success": False,
-            "message": "Website URL is required.",
-        }
-
+        return {"success": False, "message": "Website URL is required."}
     if not html.strip():
-        return {
-            "success": False,
-            "message": "HTML source is required.",
-        }
+        return {"success": False, "message": "HTML source is required."}
 
-    logger.info(
-        "Received manual HTML for: %s",
-        url,
-    )
+    logger.info("Received manual HTML for: %s", url)
 
     try:
         processor = WebsiteProcessor(page=None)
         cleaned_data = processor.process_html(html)
-
     except ValueError as exc:
-        return {
-            "success": False,
-            "message": str(exc),
-        }
-
+        return {"success": False, "message": str(exc)}
     except Exception:
-        logger.exception(
-            "Manual HTML processing failed for %s",
-            url,
-        )
-
-        return {
-            "success": False,
-            "message": "Unable to process the supplied HTML.",
-        }
+        logger.exception("Manual HTML processing failed for %s", url)
+        return {"success": False, "message": "Unable to process the supplied HTML."}
 
     emails = cleaned_data["emails"]
     phones = cleaned_data["phones"]
-
     emails_str = ", ".join(emails)
     phones_str = ", ".join(phones)
-
-    if not emails and not phones:
-        status = "MISSING_DATA"
-    else:
-        status = "COMPLETED"
-
+    status = "MISSING_DATA" if not emails and not phones else "COMPLETED"
     existing_lead = db.get_lead_by_website(url)
 
     if existing_lead:
         lead_id = existing_lead["id"]
-
-        logger.info(
-            "Updating existing Lead ID %s",
-            lead_id,
-        )
-
-        db.update_lead_scraped_data(
-            lead_id,
-            emails=emails_str,
-            phones=phones_str,
-            text=cleaned_data["text"],
-        )
-
-        db.update_lead_status(
-            lead_id,
-            status,
-            website=url,
-        )
-
+        db.update_lead_scraped_data(lead_id, emails_str, phones_str, cleaned_data["text"])
+        db.update_lead_status(lead_id, status, website=url)
         sheets_manager.update_lead(
             lead_id=lead_id,
-            company_name=(
-                existing_lead["company_name"]
-                or "Unknown"
-            ),
-            source_url=(
-                existing_lead["source_url"]
-                or "Manual HTML"
-            ),
+            company_name=existing_lead["company_name"] or "Unknown",
+            source_url=existing_lead["source_url"] or "Manual HTML",
             website=url,
             emails=emails_str,
             phones=phones_str,
             status=status,
         )
-
-        message = (
-            f"Updated existing Lead ID "
-            f"{lead_id}! Status: {status}"
-        )
-
+        message = f"Updated existing Lead ID {lead_id}! Status: {status}"
     else:
-        lead_id = db.add_lead(
-            source_url="Manual HTML",
-            company_name="Unknown",
-            location="",
-        )
-
-        db.update_lead_status(
-            lead_id,
-            "PROCESSING",
-            website=url,
-        )
-
-        db.update_lead_scraped_data(
-            lead_id,
-            emails=emails_str,
-            phones=phones_str,
-            text=cleaned_data["text"],
-        )
-
-        db.update_lead_status(
-            lead_id,
-            status,
-            website=url,
-        )
-
+        lead_id = db.add_lead(source_url="Manual HTML", company_name="Unknown", location="")
+        db.update_lead_status(lead_id, "PROCESSING", website=url)
+        db.update_lead_scraped_data(lead_id, emails_str, phones_str, cleaned_data["text"])
+        db.update_lead_status(lead_id, status, website=url)
         sheets_manager.add_lead(
             lead_id=lead_id,
             company_name="Unknown",
@@ -209,14 +137,9 @@ async def manual_html(request: Request):
             phones=phones_str,
             status=status,
         )
-
-        message = (
-            f"Created new Lead ID "
-            f"{lead_id}! Status: {status}"
-        )
+        message = f"Created new Lead ID {lead_id}! Status: {status}"
 
     logger.info(message)
-
     return {
         "success": True,
         "message": message,
@@ -232,27 +155,14 @@ async def manual_html(request: Request):
 
 @app.post("/debug/process-html")
 async def debug_process_html(request: Request):
-    """
-    Development endpoint.
-
-    Processes HTML without touching the database.
-    Useful while developing the parser.
-    """
-
+    """Development endpoint for parser debugging."""
     data = await request.json()
-
     html = data.get("html", "")
-
     if not html.strip():
-        return {
-            "success": False,
-            "message": "HTML is required.",
-        }
+        return {"success": False, "message": "HTML is required."}
 
     processor = WebsiteProcessor(page=None)
-
     result = processor.process_html(html)
-
     return {
         "success": True,
         "text_length": len(result["text"]),

@@ -5,33 +5,47 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lead Intelligence Dashboard</title>
     <style>
-        :root { --bg:#f5f7fb; --card:#fff; --text:#18212f; --muted:#667085; --line:#e5e7eb; --accent:#2563eb; }
+        :root { --bg:#f5f7fb; --card:#fff; --text:#18212f; --muted:#667085; --line:#e5e7eb; --accent:#2563eb; --danger:#b42318; }
         * { box-sizing:border-box; }
         body { margin:0; font-family:Arial,sans-serif; background:var(--bg); color:var(--text); }
         header { background:#111827; color:#fff; padding:18px 28px; display:flex; justify-content:space-between; align-items:center; }
         header h1 { margin:0; font-size:21px; }
         header a { color:#fff; text-decoration:none; opacity:.9; }
-        main { max-width:1250px; margin:0 auto; padding:28px; }
+        main { max-width:1350px; margin:0 auto; padding:28px; }
         .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:24px; }
-        .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; }
+        .card,.section,.detail { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; }
         .label { color:var(--muted); font-size:13px; }
         .value { font-size:30px; font-weight:700; margin-top:8px; }
-        .section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:20px; }
+        .section { margin-bottom:20px; }
         .section-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; }
         h2 { margin:0; font-size:18px; }
+        h3 { margin:0 0 8px; font-size:16px; }
         button { border:0; background:var(--accent); color:#fff; border-radius:7px; padding:9px 13px; cursor:pointer; }
+        button.secondary { background:#eef2f6; color:var(--text); }
         .table-wrap { overflow:auto; }
-        table { width:100%; border-collapse:collapse; min-width:900px; }
+        table { width:100%; border-collapse:collapse; min-width:950px; }
         th,td { text-align:left; padding:12px 10px; border-bottom:1px solid var(--line); vertical-align:top; font-size:13px; }
         th { color:var(--muted); font-size:12px; text-transform:uppercase; }
+        tr.lead-row { cursor:pointer; }
+        tr.lead-row:hover { background:#f8fafc; }
         .score { font-weight:700; padding:5px 9px; border-radius:999px; background:#eef2ff; display:inline-block; }
-        .status { font-size:11px; font-weight:700; padding:5px 8px; border-radius:999px; background:#f2f4f7; }
-        .opp { margin:4px 0; }
+        .status,.priority { font-size:11px; font-weight:700; padding:5px 8px; border-radius:999px; background:#f2f4f7; display:inline-block; }
+        .opp { margin:6px 0; }
         .opp strong { display:block; }
         .muted { color:var(--muted); }
         .empty { padding:30px; text-align:center; color:var(--muted); }
-        .error { color:#b42318; padding:10px 0; }
-        @media(max-width:900px) { .cards { grid-template-columns:repeat(2,1fr); } }
+        .error { color:var(--danger); padding:10px 0; }
+        .detail { display:none; margin-bottom:20px; }
+        .detail.open { display:block; }
+        .detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+        .detail-item { padding:12px; background:#f8fafc; border-radius:8px; }
+        .detail-item .label { margin-bottom:5px; }
+        .opportunity { border:1px solid var(--line); border-radius:9px; padding:14px; margin-top:10px; }
+        .opportunity-title { font-weight:700; }
+        .evidence { margin:8px 0 0; padding-left:18px; }
+        .draft { white-space:pre-wrap; background:#f8fafc; border-radius:8px; padding:14px; font-size:13px; line-height:1.5; }
+        .close { float:right; }
+        @media(max-width:900px) { .cards { grid-template-columns:repeat(2,1fr); } .detail-grid { grid-template-columns:1fr; } }
         @media(max-width:600px) { .cards { grid-template-columns:1fr; } main { padding:16px; } }
     </style>
 </head>
@@ -42,6 +56,8 @@
 </header>
 <main>
     <div id="error" class="error"></div>
+    <section id="detail" class="detail"></section>
+
     <section class="cards">
         <div class="card"><div class="label">Total Leads</div><div id="total" class="value">—</div></div>
         <div class="card"><div class="label">High Opportunity (7+)</div><div id="high" class="value">—</div></div>
@@ -60,7 +76,7 @@
     <section class="section">
         <div class="section-head">
             <h2>Recent Leads & Analysis</h2>
-            <span class="muted">Latest 100</span>
+            <span class="muted">Click a lead for full intelligence</span>
         </div>
         <div class="table-wrap">
             <table>
@@ -74,10 +90,8 @@
 function esc(value) {
     return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 }
-function parseEmailDraft(text) {
-    if (!text) return '';
-    return text.replace(/\n/g, '<br>');
-}
+function parseEmailDraft(text) { return text ? esc(text).replace(/\n/g, '<br>') : ''; }
+
 function renderLeads(leads) {
     const tbody = document.getElementById('leads');
     if (!leads.length) {
@@ -90,11 +104,11 @@ function renderLeads(leads) {
         const oppHtml = opportunities.length
             ? opportunities.slice(0,4).map(o => `<div class="opp"><strong>${esc(o.title)}</strong><span class="muted">${esc(o.priority)} · ${esc(o.confidence)} confidence</span></div>`).join('')
             : '<span class="muted">No opportunity found</span>';
-        const contacts = [lead.extracted_emails, lead.extracted_phones].filter(Boolean).join('<br>');
+        const contacts = [lead.extracted_emails, lead.extracted_phones].filter(Boolean).map(esc).join('<br>');
         const draft = analysis.personalized_email
-            ? `<details><summary>View draft</summary><div style="margin-top:8px">${parseEmailDraft(analysis.personalized_email)}</div></details>`
+            ? `<details onclick="event.stopPropagation()"><summary>View draft</summary><div style="margin-top:8px">${parseEmailDraft(analysis.personalized_email)}</div></details>`
             : '<span class="muted">—</span>';
-        return `<tr>
+        return `<tr class="lead-row" onclick="openLead(${lead.id})">
             <td><strong>${esc(lead.company_name || analysis.business_name || 'Unknown')}</strong><br><span class="muted">${esc(lead.website || lead.source_url)}</span></td>
             <td><span class="status">${esc(lead.status)}</span></td>
             <td>${lead.opportunity_score == null ? '—' : `<span class="score">${esc(lead.opportunity_score)}/10</span>`}</td>
@@ -104,10 +118,53 @@ function renderLeads(leads) {
         </tr>`;
     }).join('');
 }
+
+function renderOpportunity(o) {
+    const evidence = Array.isArray(o.evidence) ? o.evidence : [];
+    return `<div class="opportunity">
+        <div class="opportunity-title">${esc(o.title || o.type || 'Opportunity')}</div>
+        <div class="muted">${esc(o.priority || '')} · ${esc(o.score ?? '')} points · ${esc(o.confidence || '')} confidence</div>
+        <p>${esc(o.impact || '')}</p>
+        <strong>Recommendation</strong>
+        <p>${esc(o.recommendation || o.description || '')}</p>
+        ${evidence.length ? `<strong>Evidence</strong><ul class="evidence">${evidence.map(e => `<li>${esc(e)}</li>`).join('')}</ul>` : ''}
+    </div>`;
+}
+
+async function openLead(id) {
+    const detail = document.getElementById('detail');
+    detail.innerHTML = '<div class="muted">Loading lead intelligence…</div>';
+    detail.classList.add('open');
+    try {
+        const response = await fetch(`/api/leads/${id}`, {cache:'no-store'});
+        const data = await response.json();
+        if (!response.ok || !data.success) throw new Error(data.message || 'Lead not found');
+        const lead = data.lead;
+        const analysis = lead.analysis || {};
+        const opportunities = analysis.opportunities || [];
+        detail.innerHTML = `<button class="secondary close" onclick="closeLead()">Close</button>
+            <h2>${esc(lead.company_name || analysis.business_name || 'Unknown')}</h2>
+            <p class="muted">${esc(lead.website || lead.source_url || '')}</p>
+            <div class="detail-grid">
+                <div class="detail-item"><div class="label">Opportunity Score</div><strong>${esc(lead.opportunity_score ?? '—')}/10</strong></div>
+                <div class="detail-item"><div class="label">Status</div><strong>${esc(lead.status)}</strong></div>
+                <div class="detail-item"><div class="label">Email</div><strong>${esc(lead.extracted_emails || 'Not found')}</strong></div>
+                <div class="detail-item"><div class="label">Phone</div><strong>${esc(lead.extracted_phones || 'Not found')}</strong></div>
+            </div>
+            <h3 style="margin-top:20px">Detected Opportunities</h3>
+            ${opportunities.length ? opportunities.map(renderOpportunity).join('') : '<p class="muted">No actionable opportunity detected yet.</p>'}
+            ${analysis.personalized_email ? `<h3 style="margin-top:20px">AI Outreach Draft</h3><div class="draft">${esc(analysis.personalized_email)}</div>` : ''}`;
+        detail.scrollIntoView({behavior:'smooth', block:'start'});
+    } catch (error) {
+        detail.innerHTML = `<div class="error">${esc(error.message)}</div>`;
+    }
+}
+function closeLead() { document.getElementById('detail').classList.remove('open'); }
+
 async function loadDashboard() {
     document.getElementById('error').textContent = '';
     try {
-        const response = await fetch('/api/dashboard', { cache:'no-store' });
+        const response = await fetch('/api/dashboard', {cache:'no-store'});
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         if (!data.success) throw new Error('Dashboard request failed');

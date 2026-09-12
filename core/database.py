@@ -189,7 +189,7 @@ class Database:
         return rows
 
     def get_dashboard_stats(self):
-        """Return high-level counts used by the dashboard cards."""
+        """Return high-level counts used by the dashboard."""
         conn = self.get_connection()
         cursor = conn.cursor()
 
@@ -208,7 +208,8 @@ class Database:
         cursor.execute("SELECT COUNT(*) FROM leads WHERE status = 'FAILED'")
         failed = cursor.fetchone()[0]
 
-        cursor.execute("SELECT COUNT(*) FROM leads WHERE opportunity_score >= 7")
+        # Opportunity scores are stored on a 0-100 scale.
+        cursor.execute("SELECT COUNT(*) FROM leads WHERE opportunity_score >= 80")
         high_opportunity = cursor.fetchone()[0]
 
         cursor.execute("SELECT AVG(opportunity_score) FROM leads WHERE opportunity_score IS NOT NULL")

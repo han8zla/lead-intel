@@ -29,7 +29,8 @@
         tr.lead-row { cursor:pointer; }
         tr.lead-row:hover { background:#f8fafc; }
         .score { font-weight:700; padding:5px 9px; border-radius:999px; background:#eef2ff; display:inline-block; }
-        .status,.priority { font-size:11px; font-weight:700; padding:5px 8px; border-radius:999px; background:#f2f4f7; display:inline-block; }
+        .band { font-size:11px; font-weight:700; padding:5px 8px; border-radius:999px; background:#f2f4f7; display:inline-block; text-transform:uppercase; }
+        .status { font-size:11px; font-weight:700; padding:5px 8px; border-radius:999px; background:#f2f4f7; display:inline-block; }
         .opp { margin:6px 0; }
         .opp strong { display:block; }
         .muted { color:var(--muted); }
@@ -60,7 +61,7 @@
 
     <section class="cards">
         <div class="card"><div class="label">Total Leads</div><div id="total" class="value">—</div></div>
-        <div class="card"><div class="label">High Opportunity (7+)</div><div id="high" class="value">—</div></div>
+        <div class="card"><div class="label">High Opportunity (80+)</div><div id="high" class="value">—</div></div>
         <div class="card"><div class="label">Completed</div><div id="completed" class="value">—</div></div>
         <div class="card"><div class="label">Average Score</div><div id="average" class="value">—</div></div>
     </section>
@@ -91,6 +92,7 @@ function esc(value) {
     return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 }
 function parseEmailDraft(text) { return text ? esc(text).replace(/\n/g, '<br>') : ''; }
+function getBand(score) { return score >= 80 ? 'high' : score >= 60 ? 'medium' : score >= 40 ? 'low' : 'weak'; }
 
 function renderLeads(leads) {
     const tbody = document.getElementById('leads');
@@ -102,16 +104,17 @@ function renderLeads(leads) {
         const analysis = lead.analysis || {};
         const opportunities = analysis.opportunities || [];
         const oppHtml = opportunities.length
-            ? opportunities.slice(0,4).map(o => `<div class="opp"><strong>${esc(o.title)}</strong><span class="muted">${esc(o.priority)} · ${esc(o.confidence)} confidence</span></div>`).join('')
+            ? opportunities.slice(0,4).map(o => `<div class="opp"><strong>${esc(o.title)}</strong><span class="muted">${esc(o.score)} / 100 · ${esc(o.confidence)}% confidence</span></div>`).join('')
             : '<span class="muted">No opportunity found</span>';
         const contacts = [lead.extracted_emails, lead.extracted_phones].filter(Boolean).map(esc).join('<br>');
         const draft = analysis.personalized_email
             ? `<details onclick="event.stopPropagation()"><summary>View draft</summary><div style="margin-top:8px">${parseEmailDraft(analysis.personalized_email)}</div></details>`
             : '<span class="muted">—</span>';
+        const band = analysis.opportunity_score_band || getBand(lead.opportunity_score || 0);
         return `<tr class="lead-row" onclick="openLead(${lead.id})">
             <td><strong>${esc(lead.company_name || analysis.business_name || 'Unknown')}</strong><br><span class="muted">${esc(lead.website || lead.source_url)}</span></td>
             <td><span class="status">${esc(lead.status)}</span></td>
-            <td>${lead.opportunity_score == null ? '—' : `<span class="score">${esc(lead.opportunity_score)}/10</span>`}</td>
+            <td>${lead.opportunity_score == null ? '—' : `<span class="score">${esc(lead.opportunity_score)}/100</span><br><span class="band">${esc(band)}</span>`}</td>
             <td>${contacts || '<span class="muted">No contact found</span>'}</td>
             <td>${oppHtml}</td>
             <td>${draft}</td>
@@ -123,8 +126,8 @@ function renderOpportunity(o) {
     const evidence = Array.isArray(o.evidence) ? o.evidence : [];
     return `<div class="opportunity">
         <div class="opportunity-title">${esc(o.title || o.type || 'Opportunity')}</div>
-        <div class="muted">${esc(o.priority || '')} · ${esc(o.score ?? '')} points · ${esc(o.confidence || '')} confidence</div>
-        <p>${esc(o.impact || '')}</p>
+        <div class="muted">${esc(o.priority || '')} · ${esc(o.score ?? '')}/100 · ${esc(o.confidence || '')}% confidence</div>
+        <p><strong>Impact:</strong> ${esc(o.impact ?? '—')}/100</p>
         <strong>Recommendation</strong>
         <p>${esc(o.recommendation || o.description || '')}</p>
         ${evidence.length ? `<strong>Evidence</strong><ul class="evidence">${evidence.map(e => `<li>${esc(e)}</li>`).join('')}</ul>` : ''}
@@ -142,15 +145,19 @@ async function openLead(id) {
         const lead = data.lead;
         const analysis = lead.analysis || {};
         const opportunities = analysis.opportunities || [];
+        const score = lead.opportunity_score;
+        const band = analysis.opportunity_score_band || getBand(score || 0);
+        const breakdown = analysis.opportunity_score_breakdown || {};
         detail.innerHTML = `<button class="secondary close" onclick="closeLead()">Close</button>
             <h2>${esc(lead.company_name || analysis.business_name || 'Unknown')}</h2>
             <p class="muted">${esc(lead.website || lead.source_url || '')}</p>
             <div class="detail-grid">
-                <div class="detail-item"><div class="label">Opportunity Score</div><strong>${esc(lead.opportunity_score ?? '—')}/10</strong></div>
+                <div class="detail-item"><div class="label">Automation Opportunity</div><strong>${esc(score ?? '—')}/100</strong> · <span class="band">${esc(band)}</span></div>
                 <div class="detail-item"><div class="label">Status</div><strong>${esc(lead.status)}</strong></div>
                 <div class="detail-item"><div class="label">Email</div><strong>${esc(lead.extracted_emails || 'Not found')}</strong></div>
                 <div class="detail-item"><div class="label">Phone</div><strong>${esc(lead.extracted_phones || 'Not found')}</strong></div>
             </div>
+            ${score != null ? `<h3 style="margin-top:20px">Score Breakdown</h3><p class="muted">Top opportunity: ${esc(breakdown.top_opportunity ?? '—')} · Secondary: ${esc(breakdown.secondary_opportunity ?? '—')} · Tertiary: ${esc(breakdown.tertiary_opportunity ?? '—')}</p>` : ''}
             <h3 style="margin-top:20px">Detected Opportunities</h3>
             ${opportunities.length ? opportunities.map(renderOpportunity).join('') : '<p class="muted">No actionable opportunity detected yet.</p>'}
             ${analysis.personalized_email ? `<h3 style="margin-top:20px">AI Outreach Draft</h3><div class="draft">${esc(analysis.personalized_email)}</div>` : ''}`;
@@ -172,7 +179,7 @@ async function loadDashboard() {
         document.getElementById('total').textContent = s.total;
         document.getElementById('high').textContent = s.high_opportunity;
         document.getElementById('completed').textContent = s.completed;
-        document.getElementById('average').textContent = s.average_score == null ? '—' : `${s.average_score}/10`;
+        document.getElementById('average').textContent = s.average_score == null ? '—' : `${s.average_score}/100`;
         document.getElementById('pipeline').textContent = `Pending: ${s.pending}  ·  Processing: ${s.processing}  ·  Completed: ${s.completed}  ·  Failed: ${s.failed}`;
         renderLeads(data.leads);
     } catch (error) {

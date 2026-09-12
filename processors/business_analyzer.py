@@ -16,7 +16,9 @@ class BusinessAnalyzer:
         "lead_form": ("contact form", "inquiry form", "enquiry form", "request a quote", "request information", "request info", "get a quote", "get started", "submit your inquiry", "send us a message", "send message", "tell us about your", "request an appointment"),
         "services": ("our services", "services", "what we do", "treatments", "specialties", "solutions", "service areas"),
         "social": ("facebook.com", "instagram.com", "linkedin.com", "youtube.com", "tiktok.com", "x.com/", "twitter.com"),
-        "ecommerce": ("add to cart", "shopping cart", "checkout", "shop now", "buy now", "product catalog", "products"),
+        # Do not classify a generic "products" mention as ecommerce. That
+        # creates false positives for healthcare/service websites.
+        "ecommerce": ("add to cart", "shopping cart", "checkout", "shop now", "buy now", "product catalog"),
         "reviews": ("reviews", "testimonials", "google reviews", "patient reviews", "customer reviews", "what our clients say"),
         "newsletter": ("newsletter", "subscribe to our", "subscribe for updates", "email updates", "join our mailing list"),
         "live_chat": ("live chat", "chat with us", "chat now", "online chat", "start a chat"),
@@ -49,9 +51,6 @@ class BusinessAnalyzer:
         has_phone = self._phone_signal(soup, lower_text) or bool(scraped_data.get("phones"))
         has_contact_page = self._contact_signal(lower_text, pages)
 
-        # Page-level DOM features are authoritative when available. This fixes
-        # cases where a contact form exists on /contact/ but disappears from the
-        # aggregated text representation.
         page_signal = self._aggregate_page_features(page_details)
         form_detected = bool(soup.find("form")) if html else False
         text_form_detected = self._text_form_signal(lower_text)
@@ -82,7 +81,7 @@ class BusinessAnalyzer:
         industry = self._industry(normalized_text, schema_types)
         services = self._services(normalized_text)
         opportunities = self.opportunity_detector.detect(signals=signals, text=normalized_text, pages=pages, industry=industry)
-        opportunity_score = self._overall_score(opportunities)
+        score_result = self.opportunity_detector.overall_score(opportunities)
 
         return {
             "url": url,
@@ -94,7 +93,9 @@ class BusinessAnalyzer:
             "schema_types": schema_types,
             "signals": signals,
             "signal_evidence": signal_evidence,
-            "opportunity_score": opportunity_score,
+            "opportunity_score": score_result["score"],
+            "opportunity_score_band": score_result["band"],
+            "opportunity_score_breakdown": score_result["breakdown"],
             "opportunities": opportunities,
             "content_length": len(normalized_text),
             "link_count": len(links),
@@ -229,11 +230,3 @@ class BusinessAnalyzer:
                     value = item["@type"]
                     types.update(str(x) for x in value) if isinstance(value, list) else types.add(str(value))
         return sorted(types)
-
-    @staticmethod
-    def _overall_score(opportunities: list[dict[str, Any]]) -> int:
-        if not opportunities:
-            return 0
-        scores = [max(0, min(100, int(item.get("score", 0)))) for item in opportunities]
-        weights = (0.55, 0.30, 0.15)
-        return round(sum(score * weights[i] for i, score in enumerate(scores[:3])))

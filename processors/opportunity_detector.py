@@ -13,7 +13,6 @@ class OpportunityDetector:
         industry: str = "unknown",
     ) -> list[dict[str, Any]]:
         pages = pages or []
-        text_lower = text.lower()
         opportunities: list[dict[str, Any]] = []
 
         def add(
@@ -27,7 +26,7 @@ class OpportunityDetector:
         ) -> None:
             if not evidence:
                 return
-            score = round(impact * (confidence / 100))
+            score = self._opportunity_score(impact, confidence)
             opportunities.append({
                 "type": type_,
                 "title": title,
@@ -54,9 +53,6 @@ class OpportunityDetector:
         contact_page = self._page_hint(pages, "contact")
         booking_hint = self._page_hint(pages, "book", "appointment", "schedule")
 
-        # A booking workflow is distinct from inquiry capture. If a booking
-        # capability exists, recommend downstream automation rather than a
-        # redundant "add a form" opportunity.
         if booking:
             evidence = ["Appointment/booking capability detected"]
             if booking_hint:
@@ -75,8 +71,6 @@ class OpportunityDetector:
                 "Automate confirmations, reminders, rescheduling prompts, no-show recovery and post-appointment follow-up.",
             )
 
-        # Existing inquiry capture means the opportunity is what happens AFTER
-        # submission, not installing another lead form.
         if form:
             evidence = ["Website inquiry/contact form detected"]
             if contact_page:
@@ -93,8 +87,6 @@ class OpportunityDetector:
                 "Route new inquiries automatically, send an immediate acknowledgement, qualify the request and trigger timed follow-ups.",
             )
 
-        # Only recommend lead capture when there is no detectable existing form
-        # or booking path. This fixes the previous false-positive overlap.
         if contact and not form and not booking and (services or email or phone):
             evidence = ["Contact page/content detected", "No dedicated inquiry form or booking path detected"]
             if services:
@@ -109,8 +101,6 @@ class OpportunityDetector:
                 "Add a structured inquiry path and route submissions into a measurable lead workflow.",
             )
 
-        # Conversion optimization is only suggested when the website clearly
-        # sells/provides services but has a weak digital conversion path.
         if services and not form and not booking and not live_chat:
             evidence = ["Services/treatments/solutions detected", "No booking, inquiry form or live-chat conversion path detected"]
             add(
@@ -147,6 +137,8 @@ class OpportunityDetector:
                 "Automate post-service review requests and route positive/negative feedback appropriately.",
             )
 
+        # Ecommerce must be backed by an explicit transaction signal. Generic
+        # words such as "products" are intentionally not sufficient.
         if ecommerce:
             evidence = ["Ecommerce/transaction capability detected"]
             add(
@@ -171,8 +163,6 @@ class OpportunityDetector:
                 "Automate welcome, segmentation and nurture sequences for subscribers.",
             )
 
-        # Social absence is deliberately not an opportunity by itself. A
-        # reputation/social recommendation needs another business signal.
         if signals.get("social") and reviews and not review_cta:
             evidence = ["Social presence detected", "Reviews/testimonials detected", "No explicit review-request CTA detected"]
             add(
@@ -185,7 +175,6 @@ class OpportunityDetector:
                 "Connect social proof and review requests into a consistent reputation workflow.",
             )
 
-        # De-duplicate by opportunity type and return strongest first.
         unique: dict[str, dict[str, Any]] = {}
         for item in opportunities:
             current = unique.get(item["type"])
@@ -197,6 +186,42 @@ class OpportunityDetector:
             unique.values(),
             key=lambda item: (-item["score"], priority_order.get(item["priority"], 9)),
         )
+
+    @staticmethod
+    def _opportunity_score(impact: int, confidence: int) -> int:
+        """Blend business impact and evidence confidence into a 0-100 score."""
+        impact = max(0, min(100, int(impact)))
+        confidence = max(0, min(100, int(confidence)))
+        return round((impact * 0.60) + (confidence * 0.40))
+
+    @classmethod
+    def overall_score(cls, opportunities: list[dict[str, Any]]) -> dict[str, Any]:
+        """Return an explainable 0-100 score using the strongest three opportunities."""
+        scores = [max(0, min(100, int(item.get("score", 0)))) for item in opportunities]
+        top = scores[:3]
+        weights = (0.55, 0.30, 0.15)
+        weighted = [round(score * weights[index]) for index, score in enumerate(top)]
+        score = round(sum(weighted)) if top else 0
+        return {
+            "score": score,
+            "band": cls.score_band(score),
+            "breakdown": {
+                "top_opportunity": top[0] if len(top) > 0 else 0,
+                "secondary_opportunity": top[1] if len(top) > 1 else 0,
+                "tertiary_opportunity": top[2] if len(top) > 2 else 0,
+                "weights": {"top": 55, "secondary": 30, "tertiary": 15},
+            },
+        }
+
+    @staticmethod
+    def score_band(score: int) -> str:
+        if score >= 80:
+            return "high"
+        if score >= 60:
+            return "medium"
+        if score >= 40:
+            return "low"
+        return "weak"
 
     @staticmethod
     def _page_hint(pages: list[str], *keywords: str) -> str:

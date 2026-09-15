@@ -115,4 +115,21 @@ class AIRouter:
 
     def _ordered_available(self) -> list[ProviderState]:
         now = time.monotonic()
-        return [state for state in self.providers if state.cooldown_until <= now]
+        states = [state for state in self.providers if state.cooldown_until <= now]
+        if self.registry is None:
+            return states
+
+        routing = self.registry.get_routing_config()
+        if routing.mode != "manual":
+            return states
+
+        target = f"{routing.active_provider_id}:{routing.active_model}"
+        selected = [
+            state for state in states
+            if state.provider.config.name == target
+        ]
+        remaining = [
+            state for state in states
+            if state.provider.config.name != target
+        ]
+        return selected + remaining

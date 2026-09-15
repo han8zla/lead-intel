@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Signal Intelligence</title>
+    <style>
+        :root { --bg:#f5f7fb; --card:#fff; --text:#18212f; --muted:#667085; --line:#e5e7eb; --accent:#2563eb; --success:#067647; --danger:#b42318; }
+        * { box-sizing:border-box; }
+        body { margin:0; font-family:Arial,sans-serif; background:var(--bg); color:var(--text); }
+        header { background:#111827; color:#fff; padding:18px 28px; display:flex; justify-content:space-between; align-items:center; }
+        header h1 { margin:0; font-size:21px; }
+        header a { color:#fff; text-decoration:none; margin-left:18px; }
+        main { max-width:1250px; margin:0 auto; padding:28px; }
+        .intro,.card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:18px; }
+        .intro h2 { margin:0 0 8px; }
+        .muted { color:var(--muted); }
+        .toolbar { display:flex; gap:10px; align-items:center; margin:18px 0; }
+        button { border:0; background:var(--accent); color:#fff; border-radius:7px; padding:9px 13px; cursor:pointer; }
+        button.secondary { background:#eef2f6; color:var(--text); }
+        button.danger { background:#fff0ef; color:var(--danger); }
+        .unknown { border:1px solid var(--line); border-radius:10px; padding:18px; margin-bottom:14px; }
+        .unknown-head { display:flex; justify-content:space-between; gap:15px; align-items:flex-start; }
+        .badge { display:inline-block; font-size:11px; font-weight:700; padding:5px 8px; border-radius:999px; background:#f2f4f7; text-transform:uppercase; }
+        .ai { background:#f8fafc; border-radius:9px; padding:14px; margin-top:12px; }
+        .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+        .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+        .signal-name { font-size:18px; font-weight:700; }
+        .success { color:var(--success); }
+        .error { color:var(--danger); margin:10px 0; }
+        @media(max-width:750px) { .grid { grid-template-columns:1fr; } .unknown-head { flex-direction:column; } }
+    </style>
+</head>
+<body>
+<header>
+    <h1>Signal Intelligence</h1>
+    <nav><a href="/dashboard">← Dashboard</a><a href="/">Intake</a></nav>
+</header>
+<main>
+    <section class="intro">
+        <h2>Unknown Signals & Validation</h2>
+        <p class="muted">Unknown observations are preserved as evidence. AI can interpret them, but nothing enters the reusable Signal Library until you explicitly validate it.</p>
+    </section>
+
+    <div class="toolbar">
+        <button onclick="loadAll()">Refresh</button>
+        <span id="summary" class="muted"></span>
+    </div>
+    <div id="message"></div>
+    <section id="unknowns"></section>
+
+    <section class="card">
+        <h2>Reusable Signal Library</h2>
+        <p class="muted">Only human-validated signals appear here and can be reused by future analyses.</p>
+        <div id="signals"></div>
+    </section>
+</main>
+<script>
+function esc(value) { return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+function json(value) { return esc(JSON.stringify(value || {}, null, 2)); }
+
+function renderUnknowns(items) {
+    const root = document.getElementById('unknowns');
+    document.getElementById('summary').textContent = `${items.length} pending review`;
+    if (!items.length) {
+        root.innerHTML = '<div class="card"><strong>No pending unknown signals.</strong><p class="muted">New ambiguous observations will appear here after an analysis run.</p></div>';
+        return;
+    }
+    root.innerHTML = items.map(item => {
+        const interpretation = item.interpretation || {};
+        return `<article class="unknown">
+            <div class="unknown-head">
+                <div><span class="badge">Pending validation</span><h3>${esc(item.observation?.unknown_workflow || 'Unknown observation')}</h3><div class="muted">Fingerprint: ${esc(item.fingerprint)}</div></div>
+                <div class="muted">Run: ${esc(item.run_id)}</div>
+            </div>
+            <div class="grid">
+                <div><strong>Observation</strong><pre>${json(item.observation)}</pre></div>
+                <div><strong>Context</strong><pre>${json(item.context)}</pre></div>
+            </div>
+            <div class="ai">
+                <strong>AI Interpretation</strong>
+                ${interpretation.canonical_name ? `<p><strong>Candidate:</strong> ${esc(interpretation.canonical_name)}</p>` : '<p class="muted">AI interpretation is not available yet.</p>'}
+                ${interpretation.business_meaning ? `<p><strong>Meaning:</strong> ${esc(interpretation.business_meaning)}</p>` : ''}
+                ${interpretation.classification ? `<p><strong>Classification:</strong> ${esc(interpretation.classification)} · <strong>Confidence:</strong> ${esc(interpretation.confidence)}</p>` : ''}
+                ${Array.isArray(interpretation.evidence_needed) && interpretation.evidence_needed.length ? `<p><strong>Evidence needed:</strong></p><ul>${interpretation.evidence_needed.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+                ${interpretation.recommended_action ? `<p><strong>AI recommendation:</strong> ${esc(interpretation.recommended_action)}</p>` : ''}
+            </div>
+            <div class="actions">
+                <button onclick="validateSignal(${item.id})">✓ Validate & Add to Signal Library</button>
+                <button class="secondary" onclick="keepSignal(${item.id})">? Keep Unknown</button>
+                <button class="danger" onclick="rejectSignal(${item.id})">✕ Reject</button>
+            </div>
+        </article>`;
+    }).join('');
+}
+
+function renderSignals(items) {
+    const root = document.getElementById('signals');
+    if (!items.length) { root.innerHTML = '<p class="muted">No validated reusable signals yet.</p>'; return; }
+    root.innerHTML = items.map(signal => `<div class="unknown"><div class="signal-name">${esc(signal.name)}</div><p>${esc(signal.description || 'No description')}</p><div class="muted">Occurrences: ${esc(signal.occurrence_count)} · Status: ${signal.enabled ? 'ACTIVE' : 'DISABLED'} · Validated via: ${esc(signal.validation_source || 'human')}</div></div>`).join('');
+}
+
+async function loadAll() {
+    document.getElementById('message').textContent = '';
+    try {
+        const [u, s] = await Promise.all([
+            fetch('/api/intelligence/unknowns?status=PENDING', {cache:'no-store'}),
+            fetch('/api/intelligence/signals', {cache:'no-store'})
+        ]);
+        const unknownData = await u.json();
+        const signalData = await s.json();
+        if (!unknownData.success) throw new Error(unknownData.message || 'Unable to load unknowns');
+        if (!signalData.success) throw new Error(signalData.message || 'Unable to load signal library');
+        renderUnknowns(unknownData.unknowns || []);
+        renderSignals(signalData.signals || []);
+    } catch (error) {
+        document.getElementById('message').innerHTML = `<div class="error">${esc(error.message)}</div>`;
+    }
+}
+
+async function action(url, successMessage) {
+    try {
+        const response = await fetch(url, {method:'POST'});
+        const data = await response.json();
+        if (!data.success) throw new Error(data.message || 'Action failed');
+        document.getElementById('message').innerHTML = `<div class="success">${esc(successMessage)}</div>`;
+        await loadAll();
+    } catch (error) {
+        document.getElementById('message').innerHTML = `<div class="error">${esc(error.message)}</div>`;
+    }
+}
+function validateSignal(id) { action(`/api/intelligence/unknowns/${id}/validate`, 'Signal validated and added to the reusable Signal Library.'); }
+function keepSignal(id) { action(`/api/intelligence/unknowns/${id}/keep`, 'Observation preserved as unknown evidence.'); }
+function rejectSignal(id) { action(`/api/intelligence/unknowns/${id}/reject`, 'Unknown signal rejected; evidence remains in history.'); }
+loadAll();
+</script>
+</body>
+</html>

@@ -180,7 +180,16 @@ class AIProviderRegistry:
             )
             if row["model_name"] and row["model_enabled"]:
                 item["models"].append(row["model_name"])
-        return [RegisteredProvider(**item) for item in grouped.values()]
+        return [
+            RegisteredProvider(
+                id=item["id"],
+                name=item["name"],
+                base_url=item["base_url"],
+                enabled=item["enabled"],
+                models=tuple(item["models"]),
+            )
+            for item in grouped.values()
+        ]
 
     def _credentials(self, provider_id: int) -> tuple[str, str, float] | None:
         self.setup_tables()

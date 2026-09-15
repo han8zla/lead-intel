@@ -78,3 +78,54 @@ def test_analysis_run_and_audit_event_are_persisted(tmp_path):
         assert counts == {"pages": 1, "signals": 1, "opportunities": 1, "events": 1}
     finally:
         conn.close()
+
+
+def test_unknown_signal_can_be_interpreted_and_validated_without_changing_evidence(tmp_path):
+    store = IntelligenceStore(str(tmp_path / "intelligence.db"))
+    store.setup_tables()
+    run_id = store.start_run(lead_id=7, source_url="https://example.com")
+
+    unknown_id = store.record_unknown(
+        run_id,
+        fingerprint="abc123",
+        page_url="https://example.com/contact/",
+        observation={"unknown_workflow": "confirmation"},
+        context={"industry": "healthcare"},
+    )
+    interpretation = {
+        "classification": "known_candidate",
+        "canonical_name": "appointment_confirmation",
+        "confidence": "medium",
+        "business_meaning": "A possible appointment confirmation workflow.",
+        "evidence_needed": ["Confirm the workflow exists beyond the website."],
+        "recommended_action": "promote_after_validation",
+    }
+
+    assert store.update_unknown(unknown_id, interpretation=interpretation)
+    unknown = store.get_unknown(unknown_id)
+    assert unknown["interpretation"]["canonical_name"] == "appointment_confirmation"
+    assert unknown["validation_status"] == "PENDING"
+
+    assert store.update_unknown(unknown_id, validation_status="VALIDATED")
+    validated = store.get_unknown(unknown_id)
+    assert validated["validation_status"] == "VALIDATED"
+    assert validated["observation"]["unknown_workflow"] == "confirmation"
+
+
+def test_unknown_validation_rejects_invalid_status(tmp_path):
+    store = IntelligenceStore(str(tmp_path / "intelligence.db"))
+    store.setup_tables()
+    run_id = store.start_run(lead_id=7, source_url="https://example.com")
+    unknown_id = store.record_unknown(
+        run_id,
+        fingerprint="xyz789",
+        page_url=None,
+        observation={"unknown_workflow": "follow_up"},
+        context={},
+    )
+
+    try:
+        store.update_unknown(unknown_id, validation_status="PROMOTED")
+        assert False, "Expected invalid validation status to raise ValueError"
+    except ValueError as exc:
+        assert "Invalid unknown signal validation status" in str(exc)

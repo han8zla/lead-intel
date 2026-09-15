@@ -13,10 +13,10 @@
         header a { color:#fff; text-decoration:none; opacity:.9; }
         main { max-width:1100px; margin:0 auto; padding:28px; }
         .grid { display:grid; grid-template-columns:1fr 1.4fr; gap:20px; }
-        .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; }
+        .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:20px; }
         h2 { margin:0 0 16px; font-size:18px; }
         label { display:block; margin:14px 0 6px; font-size:13px; font-weight:700; }
-        input { width:100%; padding:10px 11px; border:1px solid #d0d5dd; border-radius:7px; font:inherit; }
+        input, select { width:100%; padding:10px 11px; border:1px solid #d0d5dd; border-radius:7px; font:inherit; background:#fff; }
         button { border:0; background:var(--accent); color:#fff; border-radius:7px; padding:9px 13px; cursor:pointer; }
         button.secondary { background:#eef2f6; color:var(--text); }
         button.danger { background:#fee4e2; color:var(--danger); }
@@ -31,7 +31,9 @@
         .message.ok { color:var(--ok); }
         .message.error { color:var(--danger); }
         .hint { background:#f8fafc; padding:12px; border-radius:8px; color:var(--muted); font-size:13px; line-height:1.5; }
-        @media(max-width:850px) { .grid { grid-template-columns:1fr; } main { padding:16px; } }
+        .routing-row { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+        .status { margin-top:12px; padding:10px 12px; border-radius:8px; background:#f8fafc; color:var(--muted); font-size:13px; }
+        @media(max-width:850px) { .grid,.routing-row { grid-template-columns:1fr; } main { padding:16px; } }
     </style>
 </head>
 <body>
@@ -40,6 +42,30 @@
     <nav><a href="/dashboard">← Dashboard</a></nav>
 </header>
 <main>
+    <section class="card">
+        <h2>AI Routing</h2>
+        <div class="hint">Automatic mode uses the configured provider/model pool with fallback. Manual mode puts one selected model first, while preserving the remaining enabled models as fallback.</div>
+        <div class="routing-row">
+            <div>
+                <label for="routingMode">Routing mode</label>
+                <select id="routingMode" onchange="routingModeChanged()">
+                    <option value="auto">Automatic — use fallback pool</option>
+                    <option value="manual">Manual — prefer selected model</option>
+                </select>
+            </div>
+            <div>
+                <label for="activeProvider">Preferred provider</label>
+                <select id="activeProvider" onchange="refreshModelChoices()"></select>
+            </div>
+        </div>
+        <label for="activeModel">Preferred model</label>
+        <select id="activeModel"></select>
+        <div class="actions">
+            <button onclick="saveRouting()">Save Routing</button>
+        </div>
+        <div id="routingMessage" class="message"></div>
+    </section>
+
     <div class="grid">
         <section class="card">
             <h2>Add / Update Provider</h2>
@@ -66,11 +92,19 @@
     </div>
 </main>
 <script>
+let providerState = [];
+let routingState = {mode:'auto', active_provider_id:null, active_model:null};
+
 function esc(value) {
     return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 }
 function setMessage(text, ok=false) {
     const el = document.getElementById('message');
+    el.textContent = text;
+    el.className = `message ${ok ? 'ok' : 'error'}`;
+}
+function setRoutingMessage(text, ok=false) {
+    const el = document.getElementById('routingMessage');
     el.textContent = text;
     el.className = `message ${ok ? 'ok' : 'error'}`;
 }
@@ -124,6 +158,54 @@ async function deleteProvider(id) {
     const result = await r.json();
     if (!result.success) return setMessage('Unable to delete provider.');
     await loadProviders();
+    await loadRouting();
+}
+function routingModeChanged() {
+    const manual = document.getElementById('routingMode').value === 'manual';
+    document.getElementById('activeProvider').disabled = !manual;
+    document.getElementById('activeModel').disabled = !manual;
+}
+function refreshModelChoices() {
+    const providerId = Number(document.getElementById('activeProvider').value);
+    const provider = providerState.find(p => p.id === providerId);
+    const modelSelect = document.getElementById('activeModel');
+    const previous = routingState.active_model;
+    modelSelect.innerHTML = (provider?.models || []).map(model => `<option value="${esc(model)}">${esc(model)}</option>`).join('');
+    if (previous && provider?.models?.includes(previous)) modelSelect.value = previous;
+}
+async function loadRouting() {
+    try {
+        const r = await fetch('/api/ai/routing', {cache:'no-store'});
+        const result = await r.json();
+        if (!result.success) throw new Error(result.message || 'Unable to load routing.');
+        routingState = result.routing;
+        providerState = result.providers || providerState;
+        const providerSelect = document.getElementById('activeProvider');
+        providerSelect.innerHTML = providerState.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+        if (routingState.active_provider_id) providerSelect.value = String(routingState.active_provider_id);
+        refreshModelChoices();
+        if (routingState.active_model) document.getElementById('activeModel').value = routingState.active_model;
+        document.getElementById('routingMode').value = routingState.mode || 'auto';
+        routingModeChanged();
+        if (!providerState.length) setRoutingMessage('Add a provider before selecting a manual model.');
+    } catch (e) { setRoutingMessage(e.message); }
+}
+async function saveRouting() {
+    const mode = document.getElementById('routingMode').value;
+    const providerId = Number(document.getElementById('activeProvider').value);
+    const model = document.getElementById('activeModel').value;
+    setRoutingMessage('Saving routing…', true);
+    try {
+        const r = await fetch('/api/ai/routing', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
+            mode,
+            active_provider_id: mode === 'manual' ? providerId : null,
+            active_model: mode === 'manual' ? model : null
+        })});
+        const result = await r.json();
+        if (!result.success) throw new Error(result.message);
+        routingState = result.routing;
+        setRoutingMessage(mode === 'manual' ? `Preferred model: ${model}` : 'Automatic fallback routing enabled.', true);
+    } catch (e) { setRoutingMessage(e.message); }
 }
 async function loadProviders() {
     const target = document.getElementById('providers');
@@ -132,15 +214,19 @@ async function loadProviders() {
         const result = await r.json();
         if (!result.success || !result.providers.length) {
             target.innerHTML = '<div class="muted">No runtime providers configured yet. Environment providers remain available as a fallback.</div>';
+            providerState = [];
             return;
         }
+        providerState = result.providers;
         target.innerHTML = result.providers.map(p => `<div class="provider">
             <div class="provider-head"><div><div class="name">${esc(p.name)}</div><div class="url">${esc(p.base_url)}</div></div><button class="danger" onclick="deleteProvider(${p.id})">Delete</button></div>
             <div class="models">${p.models.map(m => `<span class="model">${esc(m)}</span>`).join('')}</div>
         </div>`).join('');
+        await loadRouting();
     } catch (e) { target.innerHTML = `<div class="message error">${esc(e.message)}</div>`; }
 }
 loadProviders();
+loadRouting();
 </script>
 </body>
 </html>

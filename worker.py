@@ -298,7 +298,7 @@ async def main():
                             status="FAILED",
                             input_summary={
                                 "business_name": analysis.get("business_name"),
-                                "opportunity_count": len(analysis["opportunities"],
+                                "opportunity_count": len(analysis["opportunities"]),
                             },
                             error_message=str(ai_exc),
                         )

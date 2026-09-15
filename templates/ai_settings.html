@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Provider Settings</title>
+    <style>
+        :root { --bg:#f5f7fb; --card:#fff; --text:#18212f; --muted:#667085; --line:#e5e7eb; --accent:#2563eb; --danger:#b42318; --ok:#067647; }
+        * { box-sizing:border-box; }
+        body { margin:0; font-family:Arial,sans-serif; background:var(--bg); color:var(--text); }
+        header { background:#111827; color:#fff; padding:18px 28px; display:flex; justify-content:space-between; align-items:center; }
+        header h1 { margin:0; font-size:21px; }
+        header a { color:#fff; text-decoration:none; opacity:.9; }
+        main { max-width:1100px; margin:0 auto; padding:28px; }
+        .grid { display:grid; grid-template-columns:1fr 1.4fr; gap:20px; }
+        .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; }
+        h2 { margin:0 0 16px; font-size:18px; }
+        label { display:block; margin:14px 0 6px; font-size:13px; font-weight:700; }
+        input { width:100%; padding:10px 11px; border:1px solid #d0d5dd; border-radius:7px; font:inherit; }
+        button { border:0; background:var(--accent); color:#fff; border-radius:7px; padding:9px 13px; cursor:pointer; }
+        button.secondary { background:#eef2f6; color:var(--text); }
+        button.danger { background:#fee4e2; color:var(--danger); }
+        .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:16px; }
+        .provider { border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:12px; }
+        .provider-head { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
+        .name { font-weight:700; font-size:16px; }
+        .url,.muted { color:var(--muted); font-size:13px; word-break:break-all; }
+        .models { margin-top:10px; display:flex; gap:6px; flex-wrap:wrap; }
+        .model { background:#f2f4f7; padding:5px 8px; border-radius:999px; font-size:12px; }
+        .message { min-height:20px; margin-top:12px; font-size:13px; }
+        .message.ok { color:var(--ok); }
+        .message.error { color:var(--danger); }
+        .hint { background:#f8fafc; padding:12px; border-radius:8px; color:var(--muted); font-size:13px; line-height:1.5; }
+        @media(max-width:850px) { .grid { grid-template-columns:1fr; } main { padding:16px; } }
+    </style>
+</head>
+<body>
+<header>
+    <h1>AI Provider Settings</h1>
+    <nav><a href="/dashboard">← Dashboard</a></nav>
+</header>
+<main>
+    <div class="grid">
+        <section class="card">
+            <h2>Add / Update Provider</h2>
+            <div class="hint">Use any provider that exposes an OpenAI-compatible <code>/chat/completions</code> endpoint. The API key is encrypted before it is stored. Providers can expose multiple models.</div>
+            <label for="name">Provider name</label>
+            <input id="name" placeholder="Gemini, Groq, My Local LLM, etc.">
+            <label for="baseUrl">API base URL</label>
+            <input id="baseUrl" placeholder="https://api.example.com/v1">
+            <label for="apiKey">API key</label>
+            <input id="apiKey" type="password" placeholder="Paste API key">
+            <label for="models">Models</label>
+            <input id="models" placeholder="model-a, model-b">
+            <div class="actions">
+                <button onclick="discoverModels()">Fetch Models</button>
+                <button class="secondary" onclick="testProvider()">Test Connection</button>
+                <button onclick="saveProvider()">Save Provider</button>
+            </div>
+            <div id="message" class="message"></div>
+        </section>
+        <section class="card">
+            <h2>Configured Providers</h2>
+            <div id="providers" class="muted">Loading…</div>
+        </section>
+    </div>
+</main>
+<script>
+function esc(value) {
+    return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+}
+function setMessage(text, ok=false) {
+    const el = document.getElementById('message');
+    el.textContent = text;
+    el.className = `message ${ok ? 'ok' : 'error'}`;
+}
+function formPayload(includeModels=true) {
+    return {
+        name: document.getElementById('name').value.trim(),
+        base_url: document.getElementById('baseUrl').value.trim(),
+        api_key: document.getElementById('apiKey').value.trim(),
+        models: includeModels ? document.getElementById('models').value.split(',').map(x => x.trim()).filter(Boolean) : []
+    };
+}
+async function discoverModels() {
+    const data = formPayload(false);
+    if (!data.base_url || !data.api_key) return setMessage('Base URL and API key are required.');
+    setMessage('Fetching models…', true);
+    try {
+        const r = await fetch('/api/ai/providers/discover', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+        const result = await r.json();
+        if (!result.success) throw new Error(result.message);
+        document.getElementById('models').value = result.models.join(', ');
+        setMessage(`Found ${result.models.length} model(s).`, true);
+    } catch (e) { setMessage(e.message); }
+}
+async function testProvider() {
+    const data = formPayload();
+    if (!data.base_url || !data.api_key || !data.models.length) return setMessage('Base URL, API key, and at least one model are required.');
+    setMessage('Testing connection…', true);
+    try {
+        const r = await fetch('/api/ai/providers/test', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...data, model:data.models[0]})});
+        const result = await r.json();
+        if (!result.success) throw new Error(result.message);
+        setMessage(`Connected: ${result.provider} / ${result.model}`, true);
+    } catch (e) { setMessage(e.message); }
+}
+async function saveProvider() {
+    const data = formPayload();
+    if (!data.name || !data.base_url || !data.api_key || !data.models.length) return setMessage('Name, base URL, API key, and at least one model are required.');
+    setMessage('Saving provider…', true);
+    try {
+        const r = await fetch('/api/ai/providers', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
+        const result = await r.json();
+        if (!result.success) throw new Error(result.message);
+        setMessage('Provider saved. API key is not displayed back to the browser.', true);
+        document.getElementById('apiKey').value = '';
+        await loadProviders();
+    } catch (e) { setMessage(e.message); }
+}
+async function deleteProvider(id) {
+    if (!confirm('Delete this provider and its configured models?')) return;
+    const r = await fetch(`/api/ai/providers/${id}`, {method:'DELETE'});
+    const result = await r.json();
+    if (!result.success) return setMessage('Unable to delete provider.');
+    await loadProviders();
+}
+async function loadProviders() {
+    const target = document.getElementById('providers');
+    try {
+        const r = await fetch('/api/ai/providers', {cache:'no-store'});
+        const result = await r.json();
+        if (!result.success || !result.providers.length) {
+            target.innerHTML = '<div class="muted">No runtime providers configured yet. Environment providers remain available as a fallback.</div>';
+            return;
+        }
+        target.innerHTML = result.providers.map(p => `<div class="provider">
+            <div class="provider-head"><div><div class="name">${esc(p.name)}</div><div class="url">${esc(p.base_url)}</div></div><button class="danger" onclick="deleteProvider(${p.id})">Delete</button></div>
+            <div class="models">${p.models.map(m => `<span class="model">${esc(m)}</span>`).join('')}</div>
+        </div>`).join('');
+    } catch (e) { target.innerHTML = `<div class="message error">${esc(e.message)}</div>`; }
+}
+loadProviders();
+</script>
+</body>
+</html>

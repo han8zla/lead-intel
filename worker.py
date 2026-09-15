@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 
+from ai.business_analyst import AIBusinessAnalyst
 from ai.email_personalizer import EmailPersonalizer
 from ai.provider_registry import AIProviderRegistry
 from ai.router import AIRouter
@@ -55,11 +56,13 @@ async def main():
 
     engine = EnrichmentEngine(min_delay=5, max_delay=10)
     analyzer = BusinessAnalyzer()
-    personalizer = EmailPersonalizer(router=AIRouter(registry=ai_registry))
+    ai_router = AIRouter(registry=ai_registry)
+    business_analyst = AIBusinessAnalyst(router=ai_router)
+    personalizer = EmailPersonalizer(router=ai_router)
 
     logger.info("Starting Worker...")
-    logger.info("AI personalization available: %s", personalizer.router.available)
-    logger.info("Configured AI models: %s", personalizer.router.models())
+    logger.info("AI analysis available: %s", business_analyst.router.available)
+    logger.info("Configured AI models: %s", business_analyst.router.models())
     await engine.start()
     ingestor = WebsiteIngestor(engine.main_page)
     sheets_manager = GoogleSheetsManager()
@@ -141,6 +144,40 @@ async def main():
                     logger.info("Opportunity [%s] %s: %s (confidence=%s)", opportunity["priority"].upper(), opportunity["title"], opportunity.get("recommendation", ""), opportunity["confidence"])
 
                 audit.event(run_id, lead_id, "score.calculated", stage="scoring", score=analysis["opportunity_score"], opportunity_count=len(analysis["opportunities"]))
+
+                # AI is advisory only: it validates evidence and opportunity
+                # candidates. It never changes the deterministic score and has
+                # no email/send/external-action capability.
+                if business_analyst.router.available and analysis["opportunities"]:
+                    audit.event(run_id, lead_id, "ai.business_analysis.started", stage="ai")
+                    try:
+                        ai_result = await business_analyst.analyze(analysis=analysis)
+                        analysis["ai_business_analysis"] = ai_result
+                        intelligence.record_ai(
+                            run_id,
+                            purpose="business_opportunity_validation",
+                            provider=ai_result.get("provider"),
+                            model=ai_result.get("model"),
+                            input_hash=_hash_payload(business_analyst._compact_payload(analysis)),
+                            status="COMPLETED",
+                            input_summary={"business_name": analysis.get("business_name"), "opportunity_count": len(analysis["opportunities"])},
+                            output=ai_result,
+                        )
+                        audit.event(run_id, lead_id, "ai.business_analysis.completed", stage="ai", provider=ai_result.get("provider"), model=ai_result.get("model"), assessment=ai_result.get("overall_assessment"))
+                    except Exception as ai_exc:
+                        analysis["ai_business_analysis_error"] = str(ai_exc)
+                        intelligence.record_ai(
+                            run_id,
+                            purpose="business_opportunity_validation",
+                            provider=None,
+                            model=None,
+                            input_hash=_hash_payload(business_analyst._compact_payload(analysis)),
+                            status="FAILED",
+                            input_summary={"business_name": analysis.get("business_name"), "opportunity_count": len(analysis["opportunities"])},
+                            error_message=str(ai_exc),
+                        )
+                        audit.event(run_id, lead_id, "ai.business_analysis.failed", stage="ai", severity="WARNING", error_type=type(ai_exc).__name__)
+                        logger.warning("AI business analysis failed for Lead ID %s: %s", lead_id, ai_exc)
 
                 if personalizer.router.available and analysis["opportunities"]:
                     audit.event(run_id, lead_id, "ai.personalization.started", stage="ai")

@@ -134,6 +134,44 @@ async def main():
                 )
 
                 audit.event(run_id, lead_id, "extraction.completed", stage="extraction")
+                for page in scraped_data.get("page_details", []):
+                    dom = page.get("dom") or {}
+                    if not dom:
+                        continue
+                    page_url = page.get("url")
+                    compact_dom = {
+                        "metadata": dom.get("metadata", {}),
+                        "headings": dom.get("headings", {}),
+                        "links": dom.get("links", []),
+                        "buttons": dom.get("buttons", []),
+                        "forms": dom.get("forms", []),
+                        "json_ld": dom.get("json_ld", []),
+                        "technologies": dom.get("technologies", []),
+                        "external_domains": dom.get("external_domains", []),
+                        "attribute_samples": dom.get("attribute_samples", []),
+                    }
+                    intelligence.record_observation(
+                        run_id,
+                        page_url=page_url,
+                        kind="dom_profile",
+                        key="page_intelligence",
+                        value=compact_dom,
+                        evidence={"source": "HTMLProcessor", "page": page_url},
+                        confidence=1.0,
+                    )
+                    audit.event(
+                        run_id,
+                        lead_id,
+                        "dom.observed",
+                        stage="extraction",
+                        page=page_url,
+                        links=len(dom.get("links", [])),
+                        forms=len(dom.get("forms", [])),
+                        buttons=len(dom.get("buttons", [])),
+                        technologies=len(dom.get("technologies", [])),
+                        external_domains=len(dom.get("external_domains", [])),
+                    )
+
                 analysis = analyzer.analyze(
                     final_website,
                     text=scraped_data.get("text", ""),
@@ -260,7 +298,7 @@ async def main():
                             status="FAILED",
                             input_summary={
                                 "business_name": analysis.get("business_name"),
-                                "opportunity_count": len(analysis["opportunities"]),
+                                "opportunity_count": len(analysis["opportunities"],
                             },
                             error_message=str(ai_exc),
                         )

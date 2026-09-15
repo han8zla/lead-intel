@@ -22,6 +22,13 @@ class RegisteredProvider:
     models: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class AIRoutingConfig:
+    mode: str = "auto"
+    active_provider_id: int | None = None
+    active_model: str | None = None
+
+
 class AIProviderRegistry:
     """Persistent registry for user-configured OpenAI-compatible AI endpoints."""
 
@@ -75,6 +82,21 @@ class AIProviderRegistry:
                 FOREIGN KEY(provider_id) REFERENCES ai_providers(id) ON DELETE CASCADE
             )
             """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_routing_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                mode TEXT NOT NULL DEFAULT 'auto',
+                active_provider_id INTEGER,
+                active_model TEXT,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY(active_provider_id) REFERENCES ai_providers(id) ON DELETE SET NULL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO ai_routing_config (id, mode) VALUES (1, 'auto')"
         )
         conn.commit()
         conn.close()
@@ -190,6 +212,65 @@ class AIProviderRegistry:
             )
             for item in grouped.values()
         ]
+
+    def get_routing_config(self) -> AIRoutingConfig:
+        self.setup_tables()
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT mode, active_provider_id, active_model FROM ai_routing_config WHERE id = 1"
+        ).fetchone()
+        conn.close()
+        if not row:
+            return AIRoutingConfig()
+        mode = row["mode"] if row["mode"] in {"auto", "manual"} else "auto"
+        return AIRoutingConfig(
+            mode=mode,
+            active_provider_id=row["active_provider_id"],
+            active_model=row["active_model"],
+        )
+
+    def set_routing_config(
+        self,
+        *,
+        mode: str = "auto",
+        active_provider_id: int | None = None,
+        active_model: str | None = None,
+    ) -> AIRoutingConfig:
+        self.setup_tables()
+        mode = mode.strip().lower()
+        if mode not in {"auto", "manual"}:
+            raise ValueError("Routing mode must be 'auto' or 'manual'")
+
+        if mode == "manual":
+            if active_provider_id is None or not (active_model or "").strip():
+                raise ValueError("Manual routing requires an active provider and model")
+            conn = self._connect()
+            valid = conn.execute(
+                """
+                SELECT 1
+                FROM ai_providers p
+                JOIN ai_models m ON m.provider_id = p.id
+                WHERE p.id = ? AND p.enabled = 1 AND m.model_name = ? AND m.enabled = 1
+                """,
+                (active_provider_id, active_model.strip()),
+            ).fetchone()
+            conn.close()
+            if not valid:
+                raise ValueError("Active provider/model is not enabled or does not exist")
+        else:
+            active_provider_id = None
+            active_model = None
+
+        conn = self._connect()
+        conn.execute(
+            """UPDATE ai_routing_config
+               SET mode = ?, active_provider_id = ?, active_model = ?, updated_at = datetime('now')
+               WHERE id = 1""",
+            (mode, active_provider_id, active_model.strip() if active_model else None),
+        )
+        conn.commit()
+        conn.close()
+        return AIRoutingConfig(mode, active_provider_id, active_model.strip() if active_model else None)
 
     def _credentials(self, provider_id: int) -> tuple[str, str, float] | None:
         self.setup_tables()

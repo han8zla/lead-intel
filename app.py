@@ -6,6 +6,7 @@ from fastapi.templating import Jinja2Templates
 
 from ai.provider_registry import AIProviderRegistry
 from core.database import Database
+from core.intelligence_reader import IntelligenceReader
 from core.intelligence_store import IntelligenceStore
 from core.unknown_signal_registry import UnknownSignalRegistry
 from crawlers.website_processor import WebsiteProcessor
@@ -22,6 +23,7 @@ db = Database()
 db.setup_tables()
 intelligence = IntelligenceStore(db.db_path)
 intelligence.setup_tables()
+reader = IntelligenceReader(db.db_path)
 signal_registry = UnknownSignalRegistry(db.db_path)
 signal_registry.setup_tables()
 ai_registry = AIProviderRegistry(db.db_path)
@@ -70,16 +72,49 @@ async def dashboard_data():
         "success": True,
         "stats": db.get_dashboard_stats(),
         "leads": leads,
+        "intelligence": {
+            "unknowns": reader.get_unknown_summary(),
+            "signal_library_count": len(reader.get_signal_registry()),
+            "system_health": reader.get_system_health(),
+        },
     }
 
 
-@app.get("/api/leads/{lead_id}")
-async def lead_detail(lead_id: int):
-    """Return one complete lead and its stored intelligence."""
-    lead = db.get_lead(lead_id)
-    if not lead:
-        return {"success": False, "message": "Lead not found."}
-    return {"success": True, "lead": _decode_analysis(lead)}
+@app.get("/api/intelligence/runs")
+async def intelligence_runs(lead_id: int | None = None, limit: int = 20):
+    """Return recent analysis runs through the read-only intelligence boundary."""
+    limit = max(1, min(limit, 100))
+    return {"success": True, "runs": reader.list_runs(lead_id=lead_id, limit=limit)}
+
+
+@app.get("/api/intelligence/runs/{run_id}")
+async def intelligence_run_detail(run_id: str):
+    """Return the complete evidence and decision trail for one analysis run."""
+    run = reader.get_run(run_id)
+    if not run:
+        return {"success": False, "message": "Analysis run not found."}
+    return {
+        "success": True,
+        "run": run,
+        "pages": reader.get_run_pages(run_id),
+        "observations": reader.get_run_observations(run_id),
+        "signals": reader.get_run_signals(run_id),
+        "unknowns": reader.get_run_unknowns(run_id),
+        "ai": reader.get_run_ai(run_id),
+        "opportunities": reader.get_run_opportunities(run_id),
+        "timeline": reader.get_run_timeline(run_id),
+    }
+
+
+@app.get("/api/intelligence/health")
+async def intelligence_health():
+    """Return Phase 4 runtime health and unknown-signal lifecycle counts."""
+    return {
+        "success": True,
+        "system": reader.get_system_health(),
+        "unknowns": reader.get_unknown_summary(),
+        "signal_library_count": len(reader.get_signal_registry()),
+    }
 
 
 @app.get("/api/intelligence/unknowns")

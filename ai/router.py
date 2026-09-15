@@ -123,7 +123,19 @@ class AIRouter:
         if routing.mode != "manual":
             return states
 
-        target = f"{routing.active_provider_id}:{routing.active_model}"
+        # ProviderState names intentionally remain human-readable as
+        # "Provider Name:model". Resolve the configured numeric provider ID
+        # through the registry rather than comparing the ID directly to that
+        # display name.
+        provider_names = {
+            provider.id: provider.name
+            for provider in self.registry.list_providers()
+        }
+        provider_name = provider_names.get(routing.active_provider_id)
+        if not provider_name or not routing.active_model:
+            return states
+
+        target = f"{provider_name}:{routing.active_model}"
         selected = [
             state for state in states
             if state.provider.config.name == target

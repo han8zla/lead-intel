@@ -2,7 +2,7 @@ from processors.business_analyzer import BusinessAnalyzer
 from processors.opportunity_detector import OpportunityDetector
 
 
-def test_opportunity_score_blends_impact_and_confidence():
+def test_opportunity_score_uses_impact_confidence_and_solution_fit():
     detector = OpportunityDetector()
     opportunities = detector.detect(
         signals={"booking": True, "email": True, "phone": True},
@@ -10,26 +10,28 @@ def test_opportunity_score_blends_impact_and_confidence():
         industry="healthcare",
     )
 
-    assert opportunities[0]["score"] == 94
-    assert opportunities[0]["impact"] == 95
-    assert opportunities[0]["confidence"] == 92
+    assert opportunities[0]["score"] == 88
+    assert opportunities[0]["impact"] == 90
+    assert opportunities[0]["confidence"] == 82
+    assert opportunities[0]["solution_fit"] == 92
 
 
 def test_overall_score_has_band_and_explainable_breakdown():
     detector = OpportunityDetector()
     opportunities = [
-        {"score": 94},
-        {"score": 86},
-        {"score": 68},
+        {"type": "appointment_lifecycle", "score": 94},
+        {"type": "reputation_follow_up", "score": 86},
+        {"type": "conversion_path", "score": 68},
     ]
 
     result = detector.overall_score(opportunities)
 
-    assert result["score"] == 88
+    assert result["score"] == 92
     assert result["band"] == "high"
     assert result["breakdown"]["top_opportunity"] == 94
     assert result["breakdown"]["secondary_opportunity"] == 86
-    assert result["breakdown"]["tertiary_opportunity"] == 68
+    assert result["breakdown"]["top_type"] == "appointment_lifecycle"
+    assert "tertiary_opportunity" not in result["breakdown"]
 
 
 def test_generic_products_text_does_not_create_ecommerce_opportunity():
@@ -42,7 +44,7 @@ def test_generic_products_text_does_not_create_ecommerce_opportunity():
     )
 
     assert result["signals"]["ecommerce"] is False
-    assert not any(item["type"] == "ecommerce_automation" for item in result["opportunities"])
+    assert not any(item["type"] == "commerce_lifecycle" for item in result["opportunities"])
 
 
 def test_explicit_transaction_signal_creates_ecommerce_opportunity():
@@ -55,4 +57,4 @@ def test_explicit_transaction_signal_creates_ecommerce_opportunity():
     )
 
     assert result["signals"]["ecommerce"] is True
-    assert any(item["type"] == "ecommerce_automation" for item in result["opportunities"])
+    assert any(item["type"] == "commerce_lifecycle" for item in result["opportunities"])

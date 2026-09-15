@@ -1,86 +1,378 @@
 # Lead Intelligence Platform
 
-> Website enrichment, business analysis, opportunity scoring, and AI-assisted outreach for qualified leads.
+> Evidence-driven website intelligence for discovering business capabilities, unknown signals, workflow opportunities, and AI-assisted automation insights.
 
 [![CI](https://github.com/han8zla/lead-intel/actions/workflows/ci.yml/badge.svg)](https://github.com/han8zla/lead-intel/actions/workflows/ci.yml)
 
-Lead Intelligence is a Python-based lead research and enrichment platform that turns a website URL into structured business intelligence. It combines website ingestion, contact extraction, business-signal analysis, opportunity detection, persistent lead storage, dashboard reporting, and optional AI-generated outreach drafts.
+Lead Intelligence started as a simple website enrichment experiment: fetch a business website, extract useful text and contacts, detect a few signals, and turn those signals into an opportunity score.
 
-The project is designed as a modular foundation for sales operations and automation workflows rather than a one-off scraper.
+It has evolved into something substantially broader.
 
-## What it does
+The current direction is an **observable, evidence-driven website intelligence platform** that treats a website as a source of business and technical evidence rather than simply a page of text. The system is being designed to discover pages, inspect HTML/DOM structure and attributes, preserve unfamiliar observations, identify known and unknown signals, build a contextual intelligence profile, use AI for reasoning where deterministic rules are insufficient, validate opportunities against evidence, and keep an auditable record of what happened during every analysis run.
 
-```text
-Website / Lead URL
-       |
-       v
-HTTP-first ingestion
-       |
-       +----> Playwright fallback for difficult pages
-       |
-       v
-Contact & content extraction
-       |
-       v
-Business signal analysis
-       |
-       v
-Opportunity detection + scoring
-       |
-       +----> AI outreach draft (optional)
-       |
-       v
-SQLite persistence
-       |
-       v
-Dashboard / Google Sheets
-```
+> **Core principle:** observe first, preserve evidence, interpret second, recommend only when the evidence supports it.
 
-## Key capabilities
+---
 
-- **HTTP-first website ingestion** with Playwright as a fallback for JavaScript-heavy or protected pages.
-- **Contact extraction** for business email addresses and phone numbers, including common `mailto:` / `tel:` patterns.
-- **Business analysis** for signals such as contact paths, booking, forms, services, reviews, ecommerce, newsletters, live chat, and social presence.
-- **Opportunity detection** that converts observed website signals into actionable automation opportunities instead of treating every missing feature as an opportunity.
-- **Transparent opportunity scoring** so leads can be prioritized before outreach.
-- **AI-assisted personalization** using OpenAI-compatible providers without coupling the application to one vendor.
-- **Automatic AI model failover** across configured models when a provider returns retryable rate-limit, server, or network failures.
-- **SQLite storage** for leads, extracted data, analysis, and processing state.
-- **Web dashboard** for pipeline statistics, opportunity scores, contacts, and generated drafts.
-- **Optional Google Sheets integration** for lightweight operational reporting.
-- **Manual HTML ingestion** for sites where automated retrieval is blocked or unreliable.
+## Project evolution
 
-## Project status
-
-This repository is an actively developed portfolio/product project. The core enrichment and analysis pipeline is functional, while production hardening and workflow features are being added incrementally.
-
-Current focus:
-
-- Enrichment reliability
-- Opportunity-score calibration with real leads
-- Human review workflow
-- Production deployment and observability
-- Safe email delivery and follow-up automation
-
-AI output is currently **draft-only**. The application does not automatically send outreach emails.
-
-## Architecture
+The project has intentionally changed direction as real websites exposed the limitations of a simple scraper-and-score model.
 
 ```text
-lead-intel/
-├── ai/                 # Provider abstraction, routing, personalization
-├── core/               # Database and domain models
-├── crawlers/           # Website crawling and enrichment orchestration
-├── ingestion/          # HTTP/Playwright website ingestion
-├── processors/         # HTML, business, and opportunity analysis
-├── templates/          # Intake and dashboard UI
-├── tests/              # Automated tests
-├── utils/              # Logging and integrations
-├── app.py              # FastAPI web application
-├── worker.py           # Background lead-processing worker
-├── .env.example        # Environment configuration template
-└── requirements.txt    # Python dependencies
+Original idea
+─────────────
+Website → body text → signals → score
+
+        ↓ real-world testing
+
+Enrichment platform
+────────────────────
+Website → HTTP/Playwright → contacts → business signals → opportunities
+
+        ↓ Phase 4 redesign
+
+Intelligence platform
+─────────────────────
+Website
+  ↓
+Site discovery
+  ↓
+Deep HTML / DOM extraction
+  ├─ text
+  ├─ metadata
+  ├─ headings
+  ├─ links / hrefs
+  ├─ buttons / CTAs
+  ├─ forms / fields / attributes
+  ├─ ARIA / data-* attributes
+  ├─ JSON-LD / structured data
+  ├─ scripts / iframes / external domains
+  └─ technology evidence
+  ↓
+Evidence store
+  ↓
+Signal engine
+  ├─ known signals
+  └─ unknown signals
+  ↓
+Business intelligence profile
+  ↓
+AI reasoning / interpretation
+  ↓
+Opportunity candidates
+  ↓
+Evidence validation
+  ↓
+Priority / confidence
+  ↓
+Dashboard + audit trail
 ```
+
+This evolution is intentional. The repository is no longer being treated as a one-off scraper; it is being developed as a portfolio-grade architecture exercise for observable AI-assisted automation systems.
+
+---
+
+## What the platform is becoming
+
+The target system is designed around several cooperating layers:
+
+| Layer | Responsibility |
+|---|---|
+| **Discovery** | Find relevant pages and understand site structure. |
+| **Extraction** | Capture text, DOM structure, attributes, metadata, forms, links, scripts, structured data, and technology evidence. |
+| **Evidence** | Preserve the source and context behind every meaningful observation. |
+| **Signal Engine** | Convert raw observations into known, unknown, and contextual signals. |
+| **Unknown Registry** | Preserve unfamiliar widgets, technologies, patterns, and behaviors instead of discarding them. |
+| **Business Intelligence** | Build a compact representation of the business, audiences, services, capabilities, and workflows. |
+| **AI Analysis** | Interpret ambiguous evidence and reason about business workflows without receiving unnecessary raw HTML. |
+| **Opportunity Engine** | Produce evidence-backed automation candidates rather than generic feature-based recommendations. |
+| **Validation** | Check confidence, evidence quality, existing capabilities, unknowns, and solution fit. |
+| **Observability** | Record logs, metrics, traces, failures, recovery attempts, and audit events. |
+| **Dashboard** | Make the entire analysis understandable to both humans and engineers. |
+
+---
+
+## Phase 4 — AI Business Intelligence & Opportunity Analysis
+
+**Phase 4 is the current major development phase.** It is being redesigned as an intelligence and observability layer rather than another collection of scoring rules.
+
+### Target analysis pipeline
+
+```text
+┌───────────────┐
+│    Website    │
+└───────┬───────┘
+        ↓
+┌────────────────────┐
+│ Site Discovery     │  pages, links, sitemap, navigation
+└────────┬───────────┘
+         ↓
+┌────────────────────┐
+│ Deep Extraction    │  DOM, forms, attributes, metadata, tech
+└────────┬───────────┘
+         ↓
+┌────────────────────┐
+│ Evidence Layer     │  provenance + context + confidence
+└────────┬───────────┘
+         ↓
+┌────────────────────┐
+│ Signal Engine      │  known + unknown signals
+└────────┬───────────┘
+         ↓
+┌────────────────────┐
+│ Business Profile   │  audiences, services, capabilities, journey
+└────────┬───────────┘
+         ↓
+┌────────────────────┐
+│ AI Reasoning       │  interpretation + workflow analysis
+└────────┬───────────┘
+         ↓
+┌────────────────────┐
+│ Opportunity Engine │  candidates + evidence + unknowns
+└────────┬───────────┘
+         ↓
+┌────────────────────┐
+│ Validation         │  confidence + impact + solution fit
+└────────┬───────────┘
+         ↓
+┌────────────────────┐
+│ Priority           │  explainable prioritization
+└────────┬───────────┘
+         ↓
+┌────────────────────┐
+│ Dashboard / Audit  │  visual analysis + system history
+└────────────────────┘
+```
+
+### Evidence-first intelligence
+
+The system should not make conclusions directly from a single keyword.
+
+For example:
+
+```text
+"Book Appointment"
+       +
+/appointments/
+       +
+external scheduler
+       +
+appointment-related form
+       ↓
+Appointment Booking
+       ↓
+Existing capability confirmed
+       ↓
+Do NOT automatically recommend building booking
+       ↓
+Investigate reminders, rescheduling, cancellation,
+no-show recovery, and downstream workflow integration
+```
+
+This distinction is central to the project: **a capability already visible on a website is evidence that something exists, not proof that the underlying business workflow is automated.**
+
+### Unknown signals
+
+Unknown observations are first-class data.
+
+```text
+Unknown widget
+   ↓
+Preserve URL + script + attributes + nearby context
+   ↓
+Attempt deterministic classification
+   ↓
+AI interpretation when necessary
+   ↓
+Confidence + evidence
+   ↓
+Human validation
+   ↓
+Signal registry
+   ↓
+Future analyses can recognize the pattern
+```
+
+This creates a feedback loop for the intelligence layer without pretending that every new observation immediately changes model weights.
+
+---
+
+## Observability and auditability
+
+The system is being designed so that failures are diagnosable, not merely logged as generic errors.
+
+Each analysis will have an **analysis run ID** connecting discovery, extraction, evidence, signals, AI calls, opportunities, and scoring.
+
+Planned event categories include:
+
+```text
+analysis.started
+crawl.page_discovered
+crawl.page_fetched
+crawl.page_failed
+crawl.fallback_started
+extraction.completed
+form.detected
+technology.detected
+evidence.created
+signal.created
+signal.updated
+signal.rejected
+unknown.detected
+ai.analysis.started
+ai.analysis.completed
+ai.validation.completed
+opportunity.created
+opportunity.rejected
+score.calculated
+analysis.completed
+analysis.failed
+```
+
+The long-term observability model separates:
+
+- **Logs** — what the application and its components are doing.
+- **Audit events** — what decisions and state changes occurred.
+- **Metrics** — how healthy and efficient the system is.
+- **Traces** — where time and failures occur across an analysis run.
+
+A failed analysis should be able to answer:
+
+> What failed? Where did it fail? What evidence was affected? Was recovery attempted? Did the system continue with partial data? How trustworthy is the final result?
+
+---
+
+## Planned dashboard
+
+The dashboard is evolving from a simple lead table into an analysis workstation.
+
+### 1. Command Center
+
+System health, analysis throughput, failure rate, AI availability, unknown signals, validation backlog, and recent runs.
+
+### 2. Analysis Pipeline
+
+A visual step-by-step view:
+
+```text
+Discovery → Extraction → Evidence → Signals → AI → Opportunities → Validation → Priority
+```
+
+Each stage should be inspectable.
+
+### 3. Intelligence Graph
+
+A visual relationship between:
+
+```text
+Business
+ ├── Pages
+ ├── Technologies
+ ├── Capabilities
+ ├── Signals
+ ├── Evidence
+ ├── Unknowns
+ ├── Workflows
+ └── Opportunities
+```
+
+### 4. Opportunities
+
+Each opportunity should explain:
+
+- the observed problem or workflow
+- supporting evidence
+- existing capabilities
+- unknowns
+- impact
+- confidence
+- Handyman solution fit
+- recommended next investigation
+
+### 5. Audit & Observability
+
+An analysis timeline with logs, failures, retries, recovery attempts, AI calls, signal decisions, and opportunity decisions.
+
+---
+
+## Current technology
+
+The core remains deliberately lightweight:
+
+- **Python 3.11+**
+- **FastAPI / Uvicorn**
+- **HTTPX**
+- **BeautifulSoup / lxml**
+- **Playwright** for browser fallback
+- **SQLite** for the current portfolio-scale persistence layer
+- **Jinja2 / HTML** for the current dashboard
+- **pytest** for automated testing
+- **OpenAI-compatible AI providers** through the internal provider/router abstraction
+- **Google Sheets** as an optional operational integration
+
+The architecture is intentionally a **modular monolith** for now. That gives the project clear boundaries without introducing distributed-system complexity before it solves a real problem. The system can later evolve toward separate workers, queues, services, managed databases, and dedicated observability infrastructure if scale requires them.
+
+---
+
+## AI architecture
+
+AI is a reasoning layer, not the scraper.
+
+The intended flow is:
+
+```text
+Raw website
+     ↓
+Local deterministic extraction
+     ↓
+Normalized evidence
+     ↓
+Compact business-intelligence JSON
+     ↓
+AI interpretation
+     ↓
+Strict structured output
+     ↓
+Validation
+     ↓
+Human-readable intelligence
+```
+
+The goal is **semantic compression**, not simply sending less text. Large raw HTML should be reduced locally into meaningful, traceable evidence before it reaches the model.
+
+AI should be allowed to say:
+
+```text
+Insufficient evidence.
+Recommend deeper investigation.
+```
+
+That is preferable to generating a confident opportunity from weak evidence.
+
+The current AI router supports ordered model pools and automatic failover across configured OpenAI-compatible providers when retryable failures occur.
+
+---
+
+## Current capabilities already implemented
+
+- HTTP-first website ingestion with Playwright fallback.
+- Same-domain relevant subpage discovery.
+- Contact extraction for business emails and phones.
+- Manual HTML ingestion for difficult sites.
+- Business signal extraction for common website capabilities.
+- Evidence-aware opportunity detection foundation.
+- Business-intelligence profile generation foundation.
+- Persistent opportunity analysis in SQLite.
+- Dashboard pipeline and lead reporting.
+- OpenAI-compatible provider abstraction.
+- Multi-model AI failover with retry/cooldown behavior.
+- AI outreach drafts remain draft-only and are not automatically sent.
+- Automated test suite and GitHub Actions CI workflow.
+- Repository documentation, contribution guidance, security guidance, and development conventions.
+
+The current Phase 4 branch is the architectural transition point toward the deeper evidence, unknown-signal, observability, and AI-analysis system described above.
+
+---
 
 ## Requirements
 
@@ -88,7 +380,9 @@ lead-intel/
 - Git
 - Chromium/Playwright browser dependencies for browser fallback
 - Google service-account credentials only if Google Sheets integration is enabled
-- An AI provider API key only if AI drafting is enabled
+- An AI provider API key only if AI analysis or drafting is enabled
+
+---
 
 ## Quick start
 
@@ -121,15 +415,13 @@ pip install -r requirements.txt
 python -m playwright install chromium
 ```
 
-Linux systems may also need the Playwright OS dependencies:
+Linux systems may also need:
 
 ```bash
 python -m playwright install --with-deps chromium
 ```
 
 ### 4. Configure the environment
-
-Copy `.env.example` to `.env` and add only the integrations you need.
 
 ```bash
 cp .env.example .env
@@ -150,7 +442,7 @@ Then open:
 
 ### 6. Start the worker
 
-In a second terminal, with the virtual environment activated:
+In a second terminal:
 
 ```bash
 python -m worker
@@ -158,11 +450,11 @@ python -m worker
 
 The API queues leads in SQLite and the worker performs enrichment and analysis asynchronously.
 
+---
+
 ## AI configuration
 
-The AI layer uses OpenAI-compatible HTTP APIs and supports an ordered model pool. This keeps the application provider-agnostic and allows automatic failover.
-
-Example:
+Example Groq configuration:
 
 ```env
 GROQ_API_KEY=your-key
@@ -170,7 +462,7 @@ GROQ_MODELS=openai/gpt-oss-20b,openai/gpt-oss-120b
 GROQ_BASE_URL=https://api.groq.com/openai/v1
 ```
 
-An optional second provider can be configured as well:
+Optional OpenRouter configuration:
 
 ```env
 OPENROUTER_API_KEY=your-key
@@ -180,15 +472,11 @@ OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 
 The router temporarily cools down models that return retryable failures such as HTTP 429 or 5xx responses and tries the next available model.
 
-## Google Sheets integration
-
-Google Sheets is optional. The integration expects a service-account credential file named `credentials.json` and a sheet named `Lead Intelligence` unless the implementation is configured differently.
-
-Keep service-account credentials outside version control. The repository `.gitignore` already excludes credential files.
+---
 
 ## Testing
 
-Run the automated test suite with:
+Run:
 
 ```bash
 pytest -q
@@ -200,46 +488,112 @@ For a quick syntax check:
 python -m py_compile app.py worker.py
 ```
 
-The GitHub Actions workflow runs the test suite on pushes and pull requests.
+The GitHub Actions workflow runs the automated test suite on pushes and pull requests.
 
-## Operational notes
+---
 
-### Scraping reliability
+## Engineering roadmap
 
-The system intentionally uses HTTP before browser automation. This reduces resource usage and makes normal websites faster to process. Playwright is used when HTTP retrieval is unavailable or insufficient.
+### Phase 1 — Foundation
+- [x] Initial lead ingestion and persistence
+- [x] Core data models
+- [x] Basic processing workflow
 
-Some websites use bot protection, authentication, geolocation controls, or dynamic rendering. The platform supports manual HTML ingestion as a fallback, but it should not be used to bypass access controls.
+### Phase 2 — Website Enrichment
+- [x] HTTP-first ingestion
+- [x] Contact extraction
+- [x] Relevant subpage discovery
+- [x] Browser fallback
+- [x] Manual HTML ingestion
 
-### Data quality
+### Phase 3 — Lead Intelligence Dashboard
+- [x] Lead pipeline
+- [x] Lead details
+- [x] Opportunity reporting
+- [x] AI draft visibility
+- [x] Operational statistics
 
-Opportunity detection is evidence-driven. A missing social profile, for example, is not automatically treated as a valuable sales opportunity. Recommendations should be based on observable business signals and verified website content.
+### Phase 4 — AI Business Intelligence & Opportunity Analysis **(current)**
+- [x] Evidence-oriented opportunity foundation
+- [x] Business-intelligence profile foundation
+- [x] AI provider/router foundation
+- [ ] Deep DOM and attribute extraction
+- [ ] Structured data / JSON-LD intelligence
+- [ ] Technology and integration detection
+- [ ] Evidence/provenance model
+- [ ] Unknown signal registry
+- [ ] Signal validation workflow
+- [ ] Analysis run model
+- [ ] Structured audit events
+- [ ] Metrics and tracing
+- [ ] AI business analyst
+- [ ] AI opportunity validation
+- [ ] Explainable priority model
+- [ ] Analysis pipeline visualization
+- [ ] Intelligence graph
+- [ ] Audit / observability dashboard
+- [ ] Real-lead validation across the collected dataset
 
-### Email safety
+### Phase 5 — Outreach Intelligence
+- [ ] Human-reviewed outreach workflow
+- [ ] Personalized campaign preparation
+- [ ] Lead segmentation
+- [ ] Follow-up planning
+- [ ] Compliance and suppression controls
 
-AI personalization generates drafts only. Human review should happen before any external outreach is sent. Any future email-sending workflow should include consent/compliance controls, rate limits, suppression lists, bounce handling, and audit logging.
+### Phase 6 — Workflow Automation
+- [ ] Triggered workflows
+- [ ] External system integrations
+- [ ] Task and notification automation
+- [ ] Workflow execution history
 
-## Production hardening roadmap
+### Phase 7 — Production Platform
+- [ ] Authentication / authorization
+- [ ] Managed relational database
+- [ ] Queue-backed workers
+- [ ] Centralized observability
+- [ ] Rate limiting
+- [ ] Security scanning
+- [ ] Backups and recovery
+- [ ] Production deployment architecture
 
-Before treating the application as a production service, complete the following:
+> The phase numbers are product milestones, not a claim that every feature in an earlier phase is production-hardened. Phase 4 is deliberately absorbing several ideas that originally appeared to belong to later phases because the intelligence layer now determines the quality of everything built on top of it.
 
-- [ ] Add authentication and authorization for the dashboard and API.
-- [ ] Move from SQLite to a managed relational database for multi-worker deployments.
-- [ ] Add structured request IDs and centralized logs.
-- [ ] Add health/readiness endpoints and monitoring.
-- [ ] Add queue-backed worker execution and retry policies.
-- [ ] Add outbound email compliance controls and audit trails.
-- [ ] Add rate limiting for public API endpoints.
-- [ ] Add automated dependency/security scanning.
-- [ ] Add backup and recovery procedures.
-- [ ] Validate opportunity-score thresholds against a representative lead dataset.
+---
 
-The repository is therefore **production-oriented, but not presented as a fully hardened public SaaS deployment yet**.
+## Production hardening
+
+Before treating the application as a production service, the following remain important:
+
+- Authentication and authorization
+- Managed relational storage for multi-worker deployments
+- Queue-backed execution and retry policies
+- Centralized structured logs
+- Metrics, tracing, and alerting
+- Health/readiness endpoints
+- Rate limiting
+- Security/dependency scanning
+- Backup and recovery procedures
+- Outreach compliance controls
+- Opportunity calibration against representative outcomes
+
+The repository is therefore **production-oriented, but not presented as a fully hardened public SaaS deployment**.
+
+---
+
+## Responsible use
+
+Only process websites and business information that you are permitted to access and use. Respect applicable laws, website terms, robots policies where relevant, privacy requirements, and outreach regulations. Do not use this project to bypass authentication, access controls, or anti-abuse protections.
+
+AI-generated analysis is decision support, not a guarantee that a business will purchase or benefit from a proposed automation. Human review remains important, especially when evidence is incomplete.
+
+---
 
 ## Development workflow
 
-Use feature branches for changes and keep commits focused. Run tests before opening a pull request.
+The current major redesign is developed on a dedicated Phase 4 branch before it becomes the new `main` baseline.
 
-Recommended flow:
+Recommended workflow:
 
 ```bash
 git checkout -b feature/your-change
@@ -249,9 +603,9 @@ git commit -m "feat: describe the change"
 git push -u origin feature/your-change
 ```
 
-## Responsible use
+Large architectural changes should be reviewed and merged as coherent milestones rather than replacing the stable baseline with partially implemented work.
 
-Only process websites and business information that you are permitted to access and use. Respect applicable laws, website terms, robots policies where relevant, privacy requirements, and outreach regulations. Do not use this project to bypass authentication, access controls, or anti-abuse protections.
+---
 
 ## License
 

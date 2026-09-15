@@ -54,6 +54,7 @@ class WebsiteIngestor:
         page_details.append({
             "url": url,
             "features": data.get("features", {}),
+            "dom": data.get("dom", {}),
             "emails": list(data.get("emails", [])),
             "phones": list(data.get("phones", [])),
             "text_preview": data.get("text", "")[:500],

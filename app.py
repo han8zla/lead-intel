@@ -1,11 +1,14 @@
+import json
+
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+
+from ai.provider_registry import AIProviderRegistry
 from core.database import Database
 from crawlers.website_processor import WebsiteProcessor
-from utils.logger import get_logger
 from utils.google_sheets import GoogleSheetsManager
-import json
+from utils.logger import get_logger
 
 
 logger = get_logger(__name__)
@@ -15,6 +18,8 @@ app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 db = Database()
 db.setup_tables()
+ai_registry = AIProviderRegistry(db.db_path)
+ai_registry.setup_tables()
 sheets_manager = GoogleSheetsManager()
 
 
@@ -61,9 +66,82 @@ async def lead_detail(lead_id: int):
     return {"success": True, "lead": _decode_analysis(lead)}
 
 
+@app.get("/api/ai/providers")
+async def ai_providers():
+    """Return configured AI providers without exposing API keys."""
+    return {"success": True, "providers": [provider.__dict__ for provider in ai_registry.list_providers()]}
+
+
+@app.post("/api/ai/providers")
+async def add_ai_provider(request: Request):
+    """Create or update an OpenAI-compatible provider and its model pool."""
+    data = await request.json()
+    try:
+        provider_id = ai_registry.upsert_provider(
+            name=data.get("name", ""),
+            base_url=data.get("base_url", ""),
+            api_key=data.get("api_key", ""),
+            models=data.get("models"),
+            enabled=bool(data.get("enabled", True)),
+            timeout=float(data.get("timeout", 45)),
+        )
+    except (ValueError, RuntimeError) as exc:
+        return {"success": False, "message": str(exc)}
+    return {"success": True, "provider": ai_registry.public_provider(provider_id)}
+
+
+@app.delete("/api/ai/providers/{provider_id}")
+async def delete_ai_provider(provider_id: int):
+    """Delete a configured AI provider and its model pool."""
+    return {"success": ai_registry.delete_provider(provider_id)}
+
+
+@app.post("/api/ai/providers/discover")
+async def discover_ai_models(request: Request):
+    """Discover models from an OpenAI-compatible provider's /models endpoint."""
+    data = await request.json()
+    try:
+        models = ai_registry.discover_models(
+            base_url=data.get("base_url", ""),
+            api_key=data.get("api_key", ""),
+            timeout=float(data.get("timeout", 15)),
+        )
+    except (ValueError, RuntimeError) as exc:
+        return {"success": False, "message": str(exc)}
+    return {"success": True, "models": models}
+
+
+@app.post("/api/ai/providers/test")
+async def test_ai_provider(request: Request):
+    """Test a provider/model without persisting its credentials."""
+    data = await request.json()
+    try:
+        from ai.providers import OpenAICompatibleProvider, ProviderConfig
+
+        provider = OpenAICompatibleProvider(
+            ProviderConfig(
+                name=data.get("name", "test-provider"),
+                base_url=data.get("base_url", ""),
+                api_key=data.get("api_key", ""),
+                model=data.get("model", ""),
+                timeout=float(data.get("timeout", 15)),
+            )
+        )
+        response = await provider.generate(
+            system="You are a connectivity test. Reply with exactly OK.",
+            user="Connectivity test.",
+            temperature=0,
+            max_tokens=10,
+        )
+    except Exception as exc:
+        logger.warning("AI provider test failed: %s", exc)
+        return {"success": False, "message": str(exc)}
+    return {"success": True, "provider": response.provider, "model": response.model, "response": response.text}
+
+
 @app.post("/enrich")
 async def enrich_lead(request: Request):
-    """Accepts a list of URLs for the bot to process"""
+    """Accept a list of URLs for the bot to process."""
     data = await request.json()
     links = data.get("links", [])
 

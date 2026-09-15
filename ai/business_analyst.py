@@ -8,12 +8,7 @@ from .router import AIRouter
 
 
 class AIBusinessAnalyst:
-    """Use an AI provider to validate opportunity candidates without executing actions.
-
-    The deterministic extraction and opportunity engine remain the source of
-    observed evidence and priority scores. AI adds interpretation and validation.
-    It never sends messages, changes lead data, or performs external actions.
-    """
+    """Use an AI provider to validate opportunity candidates without executing actions."""
 
     def __init__(self, router: AIRouter | None = None):
         self.router = router or AIRouter()
@@ -40,7 +35,7 @@ class AIBusinessAnalyst:
             "Validate whether each candidate is worth presenting to a human reviewer. "
             "Do not calculate or replace the deterministic priority score. "
             "If evidence is insufficient, say so rather than guessing.\n\n"
-            f"{json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))}"
+            + json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))
         )
 
         response = await self.router.generate(
@@ -86,9 +81,12 @@ class AIBusinessAnalyst:
     def _parse_json(text: str) -> dict[str, Any]:
         candidate = text.strip()
         if candidate.startswith("```"):
-            candidate = candidate.strip("`")
-            if candidate.startswith("json"):
-                candidate = candidate[4:].lstrip()
+            lines = candidate.splitlines()
+            if lines and lines[0].strip().lower() == "```json":
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            candidate = "\n".join(lines).strip()
         try:
             parsed = json.loads(candidate)
         except json.JSONDecodeError as exc:

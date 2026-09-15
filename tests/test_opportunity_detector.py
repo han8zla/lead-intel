@@ -55,8 +55,10 @@ def test_multiple_audiences_create_routing_opportunity():
         industry="healthcare",
     )
     opportunity = next(item for item in result if item["type"] == "audience_routing")
-    assert "families" in opportunity["evidence"][0]
-    assert "caregivers" in opportunity["evidence"][0]
+    evidence = opportunity["evidence"][0]
+    assert "families" in evidence
+    assert "referrers" in evidence
+    assert "professionals" in evidence
     assert opportunity["solution_fit"] >= 90
 
 

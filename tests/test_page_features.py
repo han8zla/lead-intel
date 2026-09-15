@@ -39,4 +39,4 @@ def test_analyzer_uses_page_level_form_evidence():
     assert analysis["signals"]["lead_form"] is True
     assert any("https://example.com/contact/" in item for item in analysis["signal_evidence"]["lead_form"])
     assert not any(item["type"] == "lead_capture" for item in analysis["opportunities"])
-    assert any(item["type"] == "inquiry_follow_up" for item in analysis["opportunities"])
+    assert any(item["type"] == "inquiry_conversion" for item in analysis["opportunities"])

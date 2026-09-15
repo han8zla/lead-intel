@@ -46,6 +46,11 @@ async def dashboard(request: Request):
     return templates.TemplateResponse(request, "dashboard.html", {"request": request})
 
 
+@app.get("/settings/ai", response_class=HTMLResponse)
+async def ai_settings(request: Request):
+    return templates.TemplateResponse(request, "ai_settings.html", {"request": request})
+
+
 @app.get("/api/dashboard")
 async def dashboard_data():
     """Return dashboard metrics and recent lead analysis."""

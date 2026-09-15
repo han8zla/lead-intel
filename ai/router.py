@@ -4,6 +4,7 @@ import logging
 import time
 from dataclasses import dataclass
 
+from .provider_registry import AIProviderRegistry
 from .providers import AIProviderError, AIResponse, OpenAICompatibleProvider, providers_from_env
 
 logger = logging.getLogger(__name__)
@@ -16,21 +17,48 @@ class ProviderState:
 
 
 class AIRouter:
-    """Route generation through a provider/model pool with automatic failover."""
+    """Route generation through dynamic providers with automatic failover."""
 
     COOLDOWN_SECONDS = 60.0
 
-    def __init__(self, providers: list[OpenAICompatibleProvider] | None = None):
+    def __init__(
+        self,
+        providers: list[OpenAICompatibleProvider] | None = None,
+        registry: AIProviderRegistry | None = None,
+    ):
+        self.registry = registry
         if providers is None:
-            providers = self._providers_from_env()
+            providers = self._providers_from_registry_or_env()
         self.providers = [ProviderState(provider) for provider in providers]
+
+    def _providers_from_registry_or_env(self) -> list[OpenAICompatibleProvider]:
+        if self.registry is not None:
+            registered = self.registry.build_providers()
+            if registered:
+                return registered
+        return self._providers_from_env()
 
     @staticmethod
     def _providers_from_env() -> list[OpenAICompatibleProvider]:
+        """Backward-compatible environment configuration."""
         providers: list[OpenAICompatibleProvider] = []
         providers.extend(providers_from_env("GROQ", default_base_url="https://api.groq.com/openai/v1"))
         providers.extend(providers_from_env("OPENROUTER", default_base_url="https://openrouter.ai/api/v1"))
+        providers.extend(providers_from_env("GEMINI", default_base_url="https://generativelanguage.googleapis.com/v1beta/openai/"))
         return providers
+
+    def refresh(self) -> None:
+        """Reload provider configuration while preserving active cooldowns."""
+        if self.registry is None:
+            return
+        current = {state.provider.config.name: state.cooldown_until for state in self.providers}
+        providers = self.registry.build_providers()
+        if not providers:
+            providers = self._providers_from_env()
+        self.providers = [
+            ProviderState(provider, cooldown_until=current.get(provider.config.name, 0.0))
+            for provider in providers
+        ]
 
     @property
     def available(self) -> bool:
@@ -50,9 +78,10 @@ class AIRouter:
         temperature: float = 0.4,
         max_tokens: int = 800,
     ) -> AIResponse:
+        self.refresh()
         if not self.providers:
             raise AIProviderError(
-                "No AI providers configured. Set GROQ_API_KEY/GROQ_MODELS or another provider."
+                "No AI providers configured. Add a provider in AI Settings or configure the environment."
             )
 
         last_error: AIProviderError | None = None

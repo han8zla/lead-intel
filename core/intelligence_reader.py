@@ -37,6 +37,7 @@ class IntelligenceReader:
             "output_json",
             "unknowns_json",
             "attributes_json",
+            "pattern_json",
         ):
             if key in item:
                 item[key.removesuffix("_json")] = cls._decode_json(item.pop(key))
@@ -128,18 +129,46 @@ class IntelligenceReader:
         )
 
     def get_run_timeline(self, run_id: str) -> list[dict]:
-        rows = self._query(
+        return self._query(
             """
             SELECT id, run_id, lead_id, event_name, stage, severity,
                    message, attributes_json, created_at
             FROM audit_events
             WHERE run_id = ?
             ORDER BY id
-            """,
+            """
+            ,
             (run_id,),
             ("attributes_json",),
         )
-        return rows
+        
+    def get_signal_registry(self, *, enabled_only: bool = True, limit: int = 100) -> list[dict]:
+        sql = "SELECT * FROM signal_registry"
+        params: tuple[Any, ...]
+        if enabled_only:
+            sql += " WHERE enabled = 1"
+            params = (limit,)
+        else:
+            params = (limit,)
+        sql += " ORDER BY updated_at DESC LIMIT ?"
+        return self._query(sql, params, ("pattern_json",))
+
+    def get_unknown_summary(self) -> dict:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT validation_status, COUNT(*) AS count FROM unknown_signals GROUP BY validation_status"
+            ).fetchall()
+            counts = {row["validation_status"]: int(row["count"]) for row in rows}
+            return {
+                "pending": counts.get("PENDING", 0),
+                "validated": counts.get("VALIDATED", 0),
+                "rejected": counts.get("REJECTED", 0),
+                "kept_unknown": counts.get("KEPT_UNKNOWN", 0),
+                "total": sum(counts.values()),
+            }
+        finally:
+            conn.close()
 
     def get_latest_runs(self, limit: int = 20) -> list[dict]:
         return self.list_runs(limit=limit)

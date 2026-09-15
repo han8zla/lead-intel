@@ -6,6 +6,7 @@ from ai.business_analyst import AIBusinessAnalyst
 from ai.email_personalizer import EmailPersonalizer
 from ai.provider_registry import AIProviderRegistry
 from ai.router import AIRouter
+from ai.unknown_signal_interpreter import UnknownSignalInterpreter
 from core.database import Database
 from core.intelligence_store import IntelligenceStore
 from core.models import RawLead
@@ -44,6 +45,113 @@ def _record_page_details(store: IntelligenceStore, run_id: str, page_details: li
         )
 
 
+async def _process_unknown_signals(
+    *,
+    intelligence: IntelligenceStore,
+    audit: AuditTrail,
+    interpreter: UnknownSignalInterpreter,
+    ai_available: bool,
+    run_id: str,
+    lead_id: int,
+    analysis: dict,
+) -> list[dict]:
+    """Persist workflow unknowns and optionally obtain conservative AI interpretations.
+
+    Unknowns remain run-specific evidence. This function never promotes an unknown
+    observation into the reusable signal registry; promotion is an explicit human action.
+    """
+    business_intelligence = analysis.get("business_intelligence") or {}
+    unknowns = business_intelligence.get("unknowns") or []
+    if not unknowns:
+        return []
+
+    observed = business_intelligence.get("observed") or {}
+    context = {
+        "business_name": analysis.get("business_name"),
+        "industry": analysis.get("industry", "unknown"),
+        "business_profile": business_intelligence.get("business_profile", {}),
+        "observed": observed,
+        "customer_journey": business_intelligence.get("customer_journey", {}),
+    }
+    persisted: list[dict] = []
+
+    for unknown in unknowns:
+        observation = {"unknown_workflow": str(unknown)}
+        fingerprint = _hash_payload({"observation": observation, "industry": context["industry"]})
+        unknown_id = intelligence.record_unknown(
+            run_id,
+            fingerprint=fingerprint,
+            page_url=None,
+            observation=observation,
+            context=context,
+        )
+        audit.event(
+            run_id,
+            lead_id,
+            "unknown_signal.created",
+            stage="signals",
+            unknown_id=unknown_id,
+            fingerprint=fingerprint,
+            observation=observation,
+        )
+
+        item = {"id": unknown_id, "fingerprint": fingerprint, "observation": observation, "status": "PENDING"}
+        if ai_available:
+            audit.event(run_id, lead_id, "ai.unknown_signal.interpretation.started", stage="ai", unknown_id=unknown_id)
+            try:
+                interpretation = await interpreter.interpret(observation=observation, context=context)
+                intelligence.update_unknown(unknown_id, interpretation=interpretation, validation_status="PENDING")
+                confidence_map = {"high": 1.0, "medium": 0.6, "low": 0.3}
+                intelligence.record_ai(
+                    run_id,
+                    purpose="unknown_signal_interpretation",
+                    provider=interpretation.get("provider"),
+                    model=interpretation.get("model"),
+                    input_hash=fingerprint,
+                    status="COMPLETED",
+                    confidence=confidence_map.get(interpretation.get("confidence"), 0.0),
+                    input_summary={"unknown_id": unknown_id, "observation": observation},
+                    output=interpretation,
+                )
+                item["interpretation"] = interpretation
+                audit.event(
+                    run_id,
+                    lead_id,
+                    "ai.unknown_signal.interpretation.completed",
+                    stage="ai",
+                    unknown_id=unknown_id,
+                    classification=interpretation.get("classification"),
+                    confidence=interpretation.get("confidence"),
+                    recommended_action=interpretation.get("recommended_action"),
+                )
+            except Exception as ai_exc:
+                intelligence.record_ai(
+                    run_id,
+                    purpose="unknown_signal_interpretation",
+                    provider=None,
+                    model=None,
+                    input_hash=fingerprint,
+                    status="FAILED",
+                    input_summary={"unknown_id": unknown_id, "observation": observation},
+                    error_message=str(ai_exc),
+                )
+                audit.event(
+                    run_id,
+                    lead_id,
+                    "ai.unknown_signal.interpretation.failed",
+                    stage="ai",
+                    severity="WARNING",
+                    unknown_id=unknown_id,
+                    error_type=type(ai_exc).__name__,
+                )
+                logger.warning("AI unknown signal interpretation failed for Lead ID %s: %s", lead_id, ai_exc)
+
+        audit.event(run_id, lead_id, "unknown_signal.validation.pending", stage="validation", unknown_id=unknown_id)
+        persisted.append(item)
+
+    return persisted
+
+
 async def main():
     db = Database()
     db.setup_tables()
@@ -58,6 +166,7 @@ async def main():
     analyzer = BusinessAnalyzer()
     ai_router = AIRouter(registry=ai_registry)
     business_analyst = AIBusinessAnalyst(router=ai_router)
+    unknown_interpreter = UnknownSignalInterpreter(router=ai_router)
     personalizer = EmailPersonalizer(router=ai_router)
 
     logger.info("Starting Worker...")
@@ -134,6 +243,16 @@ async def main():
                 )
                 audit.event(run_id, lead_id, "business_intelligence.completed", stage="intelligence", industry=analysis["industry"], audience_count=len(analysis["business_intelligence"].get("business_profile", {}).get("audiences", [])))
 
+                analysis["unknown_signal_records"] = await _process_unknown_signals(
+                    intelligence=intelligence,
+                    audit=audit,
+                    interpreter=unknown_interpreter,
+                    ai_available=business_analyst.router.available,
+                    run_id=run_id,
+                    lead_id=lead_id,
+                    analysis=analysis,
+                )
+
                 logger.info("Business Analysis: business=%s industry=%s score=%s", analysis["business_name"], analysis["industry"], analysis["opportunity_score"])
                 logger.info("Business Signals: %s", analysis["signals"])
                 logger.info("Business Intelligence: %s", analysis["business_intelligence"])
@@ -145,9 +264,6 @@ async def main():
 
                 audit.event(run_id, lead_id, "score.calculated", stage="scoring", score=analysis["opportunity_score"], opportunity_count=len(analysis["opportunities"]))
 
-                # AI is advisory only: it validates evidence and opportunity
-                # candidates. It never changes the deterministic score and has
-                # no email/send/external-action capability.
                 if business_analyst.router.available and analysis["opportunities"]:
                     audit.event(run_id, lead_id, "ai.business_analysis.started", stage="ai")
                     try:
@@ -200,7 +316,7 @@ async def main():
                 db.update_lead_status(lead_id, final_status, website=final_website)
                 sheets_manager.add_lead(lead_id=lead_id, company_name=enriched_lead.company_name or analysis["business_name"] or "Unknown", source_url=source_url, website=final_website, emails=scraped_data["emails"], phones=scraped_data["phones"], status=final_status, text=scraped_data["text"], opportunity_score=analysis["opportunity_score"])
 
-                intelligence.finish_run(run_id, "COMPLETED", {"status": final_status, "pages": len(scraped_data.get("pages", [])), "signals": sum(1 for value in analysis.get("signals", {}).values() if value), "opportunities": len(analysis.get("opportunities", [])), "score": analysis.get("opportunity_score")})
+                intelligence.finish_run(run_id, "COMPLETED", {"status": final_status, "pages": len(scraped_data.get("pages", [])), "signals": sum(1 for value in analysis.get("signals", {}).values() if value), "opportunities": len(analysis.get("opportunities", [])), "unknowns": len(analysis.get("unknown_signal_records", [])), "score": analysis.get("opportunity_score")})
                 audit.event(run_id, lead_id, "analysis.completed", stage="analysis", status=final_status, score=analysis["opportunity_score"])
                 logger.info("Finished Lead ID %s. Status: %s. Opportunity score: %s (run_id=%s)", lead_id, final_status, analysis["opportunity_score"], run_id)
 

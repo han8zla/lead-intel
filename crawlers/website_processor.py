@@ -80,6 +80,7 @@ class WebsiteProcessor:
         page_details.append({
             "url": url,
             "features": data.get("features", {}),
+            "dom": data.get("dom", {}),
             "emails": list(data.get("emails", [])),
             "phones": list(data.get("phones", [])),
             "text_preview": data.get("text", "")[:500],
@@ -92,7 +93,13 @@ class WebsiteProcessor:
         await self._dismiss_cookies()
         html = await self.page.content()
         data = self.process_html(html)
-        logger.info("Playwright extracted %s: emails=%d phones=%d text=%d", url, len(data.get("emails", [])), len(data.get("phones", [])), len(data.get("text", "")))
+        logger.info(
+            "Playwright extracted %s: emails=%d phones=%d text=%d",
+            url,
+            len(data.get("emails", [])),
+            len(data.get("phones", [])),
+            len(data.get("text", "")),
+        )
         return data
 
     async def scrape_website(self, base_url: str) -> dict:

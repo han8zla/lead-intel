@@ -64,11 +64,20 @@ async def main():
                 )
 
                 analysis = analyzer.analyze(final_website, text=scraped_data.get("text", ""), scraped_data=scraped_data)
+                analysis["business_intelligence"] = analyzer.opportunity_detector.analyze_business(
+                    signals=analysis["signals"],
+                    text=scraped_data.get("text", ""),
+                    pages=scraped_data.get("pages", []),
+                    industry=analysis["industry"],
+                    services=analysis.get("services", []),
+                )
+
                 logger.info(
                     "Business Analysis: business=%s industry=%s score=%s",
                     analysis["business_name"], analysis["industry"], analysis["opportunity_score"],
                 )
                 logger.info("Business Signals: %s", analysis["signals"])
+                logger.info("Business Intelligence: %s", analysis["business_intelligence"])
                 for opportunity in analysis["opportunities"]:
                     logger.info(
                         "Opportunity [%s] %s: %s (confidence=%s)",

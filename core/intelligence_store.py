@@ -214,7 +214,16 @@ class IntelligenceStore:
         severity: str = "INFO",
         message: str | None = None,
         attributes: dict | None = None,
+        url: str | None = None,
+        status_code: int | None = None,
     ) -> int:
+        """Persist an audit event and normalize common HTTP metadata into attributes."""
+        event_attributes = dict(attributes or {})
+        if url is not None:
+            event_attributes["url"] = url
+        if status_code is not None:
+            event_attributes["status_code"] = status_code
+
         conn = self._connect()
         try:
             cursor = conn.execute(
@@ -230,7 +239,7 @@ class IntelligenceStore:
                     stage,
                     severity,
                     message,
-                    self._json(attributes),
+                    self._json(event_attributes),
                     self._now(),
                 ),
             )

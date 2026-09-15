@@ -1,4 +1,3 @@
-import os
 import sqlite3
 
 from cryptography.fernet import Fernet
@@ -31,7 +30,7 @@ def test_registry_stores_credentials_encrypted_and_builds_models(tmp_path, monke
 
 
 def test_router_refreshes_from_registry(tmp_path, monkeypatch):
-    monkeypatch.setenv("AI_SETTINGS_ENCRYPTION_KEY", os.environ.get("AI_SETTINGS_ENCRYPTION_KEY", Fernet.generate_key().decode()))
+    monkeypatch.setenv("AI_SETTINGS_ENCRYPTION_KEY", Fernet.generate_key().decode())
     registry = AIProviderRegistry(str(tmp_path / "ai.db"))
     registry.upsert_provider(
         name="Test Provider",

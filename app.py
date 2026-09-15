@@ -6,6 +6,8 @@ from fastapi.templating import Jinja2Templates
 
 from ai.provider_registry import AIProviderRegistry
 from core.database import Database
+from core.intelligence_store import IntelligenceStore
+from core.unknown_signal_registry import UnknownSignalRegistry
 from crawlers.website_processor import WebsiteProcessor
 from utils.google_sheets import GoogleSheetsManager
 from utils.logger import get_logger
@@ -18,6 +20,10 @@ app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 db = Database()
 db.setup_tables()
+intelligence = IntelligenceStore(db.db_path)
+intelligence.setup_tables()
+signal_registry = UnknownSignalRegistry(db.db_path)
+signal_registry.setup_tables()
 ai_registry = AIProviderRegistry(db.db_path)
 ai_registry.setup_tables()
 sheets_manager = GoogleSheetsManager()
@@ -46,6 +52,11 @@ async def dashboard(request: Request):
     return templates.TemplateResponse(request, "dashboard.html", {"request": request})
 
 
+@app.get("/signals", response_class=HTMLResponse)
+async def signals_page(request: Request):
+    return templates.TemplateResponse(request, "signals.html", {"request": request})
+
+
 @app.get("/settings/ai", response_class=HTMLResponse)
 async def ai_settings(request: Request):
     return templates.TemplateResponse(request, "ai_settings.html", {"request": request})
@@ -69,6 +80,75 @@ async def lead_detail(lead_id: int):
     if not lead:
         return {"success": False, "message": "Lead not found."}
     return {"success": True, "lead": _decode_analysis(lead)}
+
+
+@app.get("/api/intelligence/unknowns")
+async def intelligence_unknowns(status: str | None = None):
+    """Return reviewable unknown observations and their AI interpretations."""
+    allowed = {None, "PENDING", "VALIDATED", "REJECTED", "KEPT_UNKNOWN"}
+    if status not in allowed:
+        return {"success": False, "message": "Invalid validation status."}
+    return {"success": True, "unknowns": intelligence.list_unknowns(status)}
+
+
+@app.get("/api/intelligence/signals")
+async def intelligence_signals():
+    """Return the reusable, human-validated signal library."""
+    return {"success": True, "signals": signal_registry.list_signals()}
+
+
+@app.post("/api/intelligence/unknowns/{unknown_id}/validate")
+async def validate_unknown_signal(unknown_id: int):
+    """Human approval gate: validate an unknown and promote it to the reusable signal library."""
+    unknown = intelligence.get_unknown(unknown_id)
+    if not unknown:
+        return {"success": False, "message": "Unknown signal not found."}
+    if unknown["validation_status"] == "VALIDATED":
+        return {"success": True, "message": "Signal is already validated.", "signal": signal_registry.get_by_fingerprint(unknown["fingerprint"])}
+
+    interpretation = unknown.get("interpretation") or {}
+    name = interpretation.get("canonical_name") or unknown.get("observation", {}).get("unknown_workflow")
+    if not name:
+        return {"success": False, "message": "A signal name is required before validation."}
+
+    signal_id = signal_registry.promote(
+        fingerprint=unknown["fingerprint"],
+        name=name,
+        description=interpretation.get("business_meaning"),
+        pattern={
+            "observation": unknown.get("observation") or {},
+            "context": unknown.get("context") or {},
+            "ai_interpretation": interpretation,
+        },
+        validation_source="human_dashboard",
+    )
+    intelligence.update_unknown(unknown_id, validation_status="VALIDATED")
+    return {
+        "success": True,
+        "message": "Signal validated and added to the reusable signal library.",
+        "signal": signal_registry.get_by_fingerprint(unknown["fingerprint"]),
+        "signal_id": signal_id,
+    }
+
+
+@app.post("/api/intelligence/unknowns/{unknown_id}/reject")
+async def reject_unknown_signal(unknown_id: int):
+    """Human review action: reject the interpretation without deleting the evidence."""
+    unknown = intelligence.get_unknown(unknown_id)
+    if not unknown:
+        return {"success": False, "message": "Unknown signal not found."}
+    intelligence.update_unknown(unknown_id, validation_status="REJECTED")
+    return {"success": True, "message": "Unknown signal rejected. Evidence remains in the analysis history."}
+
+
+@app.post("/api/intelligence/unknowns/{unknown_id}/keep")
+async def keep_unknown_signal(unknown_id: int):
+    """Keep an observation as evidence without promoting it to the reusable library."""
+    unknown = intelligence.get_unknown(unknown_id)
+    if not unknown:
+        return {"success": False, "message": "Unknown signal not found."}
+    intelligence.update_unknown(unknown_id, validation_status="KEPT_UNKNOWN")
+    return {"success": True, "message": "Observation preserved as unknown evidence; it was not promoted."}
 
 
 @app.get("/api/ai/providers")
@@ -223,44 +303,18 @@ async def manual_html(request: Request):
         lead_id = existing_lead["id"]
         db.update_lead_scraped_data(lead_id, emails_str, phones_str, cleaned_data["text"])
         db.update_lead_status(lead_id, status, website=url)
-        sheets_manager.update_lead(
-            lead_id=lead_id,
-            company_name=existing_lead["company_name"] or "Unknown",
-            source_url=existing_lead["source_url"] or "Manual HTML",
-            website=url,
-            emails=emails_str,
-            phones=phones_str,
-            status=status,
-        )
+        sheets_manager.update_lead(lead_id=lead_id, company_name=existing_lead["company_name"] or "Unknown", source_url=existing_lead["source_url"] or "Manual HTML", website=url, emails=emails_str, phones=phones_str, status=status)
         message = f"Updated existing Lead ID {lead_id}! Status: {status}"
     else:
         lead_id = db.add_lead(source_url="Manual HTML", company_name="Unknown", location="")
         db.update_lead_status(lead_id, "PROCESSING", website=url)
         db.update_lead_scraped_data(lead_id, emails_str, phones_str, cleaned_data["text"])
         db.update_lead_status(lead_id, status, website=url)
-        sheets_manager.add_lead(
-            lead_id=lead_id,
-            company_name="Unknown",
-            source_url="Manual HTML",
-            website=url,
-            emails=emails_str,
-            phones=phones_str,
-            status=status,
-        )
+        sheets_manager.add_lead(lead_id=lead_id, company_name="Unknown", source_url="Manual HTML", website=url, emails=emails_str, phones=phones_str, status=status)
         message = f"Created new Lead ID {lead_id}! Status: {status}"
 
     logger.info(message)
-    return {
-        "success": True,
-        "message": message,
-        "lead_id": lead_id,
-        "status": status,
-        "extracted": {
-            "emails": emails,
-            "phones": phones,
-            "text_length": len(cleaned_data["text"]),
-        },
-    }
+    return {"success": True, "message": message, "lead_id": lead_id, "status": status, "extracted": {"emails": emails, "phones": phones, "text_length": len(cleaned_data["text"])}}
 
 
 @app.post("/debug/process-html")
@@ -273,10 +327,4 @@ async def debug_process_html(request: Request):
 
     processor = WebsiteProcessor(page=None)
     result = processor.process_html(html)
-    return {
-        "success": True,
-        "text_length": len(result["text"]),
-        "emails": result["emails"],
-        "phones": result["phones"],
-        "text_preview": result["text"][:1000],
-    }
+    return {"success": True, "text_length": len(result["text"]), "emails": result["emails"], "phones": result["phones"], "text_preview": result["text"][:1000]}

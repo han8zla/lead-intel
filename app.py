@@ -77,6 +77,33 @@ async def ai_providers():
     return {"success": True, "providers": [provider.__dict__ for provider in ai_registry.list_providers()]}
 
 
+@app.get("/api/ai/routing")
+async def ai_routing():
+    """Return the active AI routing mode and selected model."""
+    routing = ai_registry.get_routing_config()
+    return {
+        "success": True,
+        "routing": routing.__dict__,
+        "providers": [provider.__dict__ for provider in ai_registry.list_providers()],
+    }
+
+
+@app.put("/api/ai/routing")
+async def update_ai_routing(request: Request):
+    """Set automatic routing or explicitly select the preferred provider/model."""
+    data = await request.json()
+    try:
+        provider_id = data.get("active_provider_id")
+        routing = ai_registry.set_routing_config(
+            mode=data.get("mode", "auto"),
+            active_provider_id=int(provider_id) if provider_id is not None else None,
+            active_model=data.get("active_model"),
+        )
+    except (TypeError, ValueError, RuntimeError) as exc:
+        return {"success": False, "message": str(exc)}
+    return {"success": True, "routing": routing.__dict__}
+
+
 @app.post("/api/ai/providers")
 async def add_ai_provider(request: Request):
     """Create or update an OpenAI-compatible provider and its model pool."""

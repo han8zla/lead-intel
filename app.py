@@ -10,6 +10,7 @@ from core.intelligence_reader import IntelligenceReader
 from core.intelligence_store import IntelligenceStore
 from core.unknown_signal_registry import UnknownSignalRegistry
 from crawlers.website_processor import WebsiteProcessor
+from observability.audit import AuditTrail
 from utils.google_sheets import GoogleSheetsManager
 from utils.logger import get_logger
 
@@ -28,6 +29,7 @@ signal_registry = UnknownSignalRegistry(db.db_path)
 signal_registry.setup_tables()
 ai_registry = AIProviderRegistry(db.db_path)
 ai_registry.setup_tables()
+audit = AuditTrail(intelligence)
 sheets_manager = GoogleSheetsManager()
 
 
@@ -42,6 +44,24 @@ def _decode_analysis(lead):
         lead["analysis"] = None
     lead.pop("opportunity_data", None)
     return lead
+
+
+def _record_unknown_review_event(unknown: dict, *, event_name: str, message: str, **attributes) -> None:
+    """Persist a human review decision in the same run-level audit trail as analysis events."""
+    run = reader.get_run(unknown["run_id"])
+    if not run:
+        raise RuntimeError(f"Analysis run not found for unknown signal {unknown['id']}")
+    audit.event(
+        unknown["run_id"],
+        int(run["lead_id"]),
+        event_name,
+        stage="human_validation",
+        message=message,
+        unknown_id=unknown["id"],
+        fingerprint=unknown["fingerprint"],
+        validation_status=attributes.pop("validation_status", None),
+        **attributes,
+    )
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -158,6 +178,15 @@ async def validate_unknown_signal(unknown_id: int):
         validation_source="human_dashboard",
     )
     intelligence.update_unknown(unknown_id, validation_status="VALIDATED")
+    _record_unknown_review_event(
+        unknown,
+        event_name="unknown_signal.validated",
+        message="Human reviewer validated the unknown observation and promoted it to the reusable signal library.",
+        validation_status="VALIDATED",
+        signal_id=signal_id,
+        signal_name=name,
+        validation_source="human_dashboard",
+    )
     return {
         "success": True,
         "message": "Signal validated and added to the reusable signal library.",
@@ -173,6 +202,13 @@ async def reject_unknown_signal(unknown_id: int):
     if not unknown:
         return {"success": False, "message": "Unknown signal not found."}
     intelligence.update_unknown(unknown_id, validation_status="REJECTED")
+    _record_unknown_review_event(
+        unknown,
+        event_name="unknown_signal.rejected",
+        message="Human reviewer rejected the unknown observation for reusable signal promotion; evidence was retained.",
+        validation_status="REJECTED",
+        validation_source="human_dashboard",
+    )
     return {"success": True, "message": "Unknown signal rejected. Evidence remains in the analysis history."}
 
 
@@ -183,6 +219,13 @@ async def keep_unknown_signal(unknown_id: int):
     if not unknown:
         return {"success": False, "message": "Unknown signal not found."}
     intelligence.update_unknown(unknown_id, validation_status="KEPT_UNKNOWN")
+    _record_unknown_review_event(
+        unknown,
+        event_name="unknown_signal.kept_unknown",
+        message="Human reviewer kept the observation as unknown evidence without promoting it.",
+        validation_status="KEPT_UNKNOWN",
+        validation_source="human_dashboard",
+    )
     return {"success": True, "message": "Observation preserved as unknown evidence; it was not promoted."}
 
 

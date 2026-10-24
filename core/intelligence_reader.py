@@ -81,7 +81,11 @@ class IntelligenceReader:
             conn.close()
 
     def get_run_pages(self, run_id: str) -> list[dict]:
-        return self._query("SELECT * FROM analysis_pages WHERE run_id = ? ORDER BY id", (run_id,), ("metadata_json",))
+        return self._query(
+            "SELECT * FROM analysis_pages WHERE run_id = ? ORDER BY id",
+            (run_id,),
+            ("metadata_json",),
+        )
 
     def get_run_observations(self, run_id: str) -> list[dict]:
         return self._query(
@@ -136,20 +140,16 @@ class IntelligenceReader:
             FROM audit_events
             WHERE run_id = ?
             ORDER BY id
-            """
-            ,
+            """,
             (run_id,),
             ("attributes_json",),
         )
-        
+
     def get_signal_registry(self, *, enabled_only: bool = True, limit: int = 100) -> list[dict]:
         sql = "SELECT * FROM signal_registry"
-        params: tuple[Any, ...]
+        params: tuple[Any, ...] = (limit,)
         if enabled_only:
             sql += " WHERE enabled = 1"
-            params = (limit,)
-        else:
-            params = (limit,)
         sql += " ORDER BY updated_at DESC LIMIT ?"
         return self._query(sql, params, ("pattern_json",))
 
